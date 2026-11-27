@@ -1,4 +1,4 @@
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore/lite';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import {
   DEFAULT_APP_STATE,

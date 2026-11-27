@@ -3,11 +3,15 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Compass,
   Copy,
   Footprints,
+  Glasses,
   Lamp,
   Layers,
   Loader2,
+  Maximize2,
+  Minimize2,
   Moon,
   RotateCcw,
   Ruler,
@@ -38,6 +42,7 @@ import {
   ViewMode,
 } from '../scene/dimensions';
 import { getEditableLabel, ObjectEditsMap } from '../scene/editableObjects';
+import { GyroStatus, VR_VIEWPOINTS, VrViewpointId } from '../scene/vrPanorama';
 import { DesignTab, WallZoneTab } from '../state/storage';
 
 export interface SharePanelState {
@@ -57,6 +62,17 @@ interface ControlDockProps {
   onSelectPreset: (preset: CameraPresetId) => void;
   walkMode: boolean;
   onToggleWalkMode: () => void;
+  vrPanoMode: boolean;
+  onToggleVrPanoMode: () => void;
+  vrViewpoint: VrViewpointId;
+  onSelectVrViewpoint: (id: VrViewpointId) => void;
+  vrGyroStatus: GyroStatus;
+  onRecenterVr: () => void;
+  xrSupported: boolean;
+  xrSessionActive: boolean;
+  onEnterWebXR: () => void;
+  isFullscreen: boolean;
+  onToggleFullscreen: () => void;
   currentRoom: string;
   viewMode: ViewMode;
   onChangeViewMode: (mode: ViewMode) => void;
@@ -92,6 +108,17 @@ export function ControlDock({
   onSelectPreset,
   walkMode,
   onToggleWalkMode,
+  vrPanoMode,
+  onToggleVrPanoMode,
+  vrViewpoint,
+  onSelectVrViewpoint,
+  vrGyroStatus,
+  onRecenterVr,
+  xrSupported,
+  xrSessionActive,
+  onEnterWebXR,
+  isFullscreen,
+  onToggleFullscreen,
   currentRoom,
   viewMode,
   onChangeViewMode,
@@ -1069,8 +1096,98 @@ export function ControlDock({
             </div>
           )}
 
+          {/* VR 360° Panoramic Strip (Oculus Quest 2 WebXR + Gyroscope + Room Teleport Points) */}
+          {vrPanoMode && !dockCollapsed && (
+            <div
+              className="mb-1.5 w-full max-w-[920px] border border-[#7a9181]/40 bg-[#171918]/96 px-2.5 py-2 shadow-2xl sm:px-3"
+              role="region"
+              aria-label="VR панорамный режим"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                {/* 6 Standing Room Panoramic Points */}
+                <div className="no-scrollbar flex flex-nowrap items-center gap-1 overflow-x-auto sm:flex-wrap">
+                  {VR_VIEWPOINTS.map((vp) => {
+                    const active = vrViewpoint === vp.id;
+                    return (
+                      <button
+                        key={vp.id}
+                        type="button"
+                        onClick={() => onSelectVrViewpoint(vp.id)}
+                        className={`shrink-0 px-2 py-1 text-[11px] font-medium whitespace-nowrap transition-colors ${
+                          active
+                            ? 'bg-[#7a9181] text-[#111412]'
+                            : 'bg-[#222624] text-[#d1cfc8] hover:bg-[#2c312f] hover:text-white'
+                        }`}
+                      >
+                        {vp.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Gyroscope Status + Recenter + Quest 2 WebXR + Fullscreen + Exit */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="border border-white/10 bg-[#1d201f] px-2 py-1 text-[10.5px] text-[#b9c6bd]">
+                    {vrGyroStatus === 'active'
+                      ? 'Гироскоп активен'
+                      : vrGyroStatus === 'denied'
+                        ? 'Доступ к гироскопу запрещён · свайп'
+                        : 'Поворот головой / мышью'}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={onRecenterVr}
+                    title="Выровнять центр обзора по комнате"
+                    className="flex items-center gap-1 border border-white/12 bg-[#222524] px-2 py-1 text-[11px] font-medium text-[#d8d6cf] transition-colors hover:bg-[#2d312f] hover:text-white"
+                  >
+                    <Compass className="h-3.5 w-3.5 text-[#9cb8a4]" />
+                    <span>Центр</span>
+                  </button>
+
+                  {xrSupported && (
+                    <button
+                      type="button"
+                      onClick={onEnterWebXR}
+                      disabled={xrSessionActive}
+                      title="Запустить стерео VR-режим в шлеме Oculus Quest 2 (WebXR)"
+                      className="flex items-center gap-1.5 bg-[#7a9181] px-2.5 py-1 text-[11px] font-semibold text-[#111412] transition-colors hover:bg-[#8da694] disabled:opacity-60"
+                    >
+                      <Glasses className="h-3.5 w-3.5" />
+                      <span>{xrSessionActive ? 'В шлеме VR' : 'Открыть в Quest 2 (VR)'}</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={onToggleFullscreen}
+                    title={isFullscreen ? 'Выйти из полноэкранного режима' : 'Во весь экран'}
+                    className="flex items-center gap-1 border border-white/12 bg-[#222524] px-2 py-1 text-[11px] font-medium text-[#d8d6cf] transition-colors hover:bg-[#2d312f] hover:text-white"
+                    aria-label={isFullscreen ? 'Выйти из полноэкранного режима' : 'Во весь экран'}
+                  >
+                    {isFullscreen ? (
+                      <Minimize2 className="h-3.5 w-3.5" />
+                    ) : (
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={onToggleVrPanoMode}
+                    title="Выйти из VR панорамы (Esc)"
+                    className="flex items-center gap-1 border border-white/12 bg-[#222524] px-2 py-1 text-[11px] font-medium text-[#c8c6bf] transition-colors hover:bg-[#312626] hover:text-white"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    <span>Выход</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Minimal Walk Mode Navigation Hint Strip */}
-          {walkMode && !dockCollapsed && (
+          {walkMode && !vrPanoMode && !dockCollapsed && (
             <div className="mb-1.5 max-w-full border border-white/10 bg-[#171918]/94 px-3 py-1 text-center text-[10px] text-[#c5c3bc] shadow-lg sm:px-3.5 sm:text-[11px]">
               <span className="sm:hidden">
                 Свайп — осмотр · Тап по полу — идти
@@ -1132,10 +1249,24 @@ export function ControlDock({
                   <span>Прогулка</span>
                 </button>
 
+                <button
+                  type="button"
+                  onClick={onToggleVrPanoMode}
+                  className={`flex shrink-0 items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold whitespace-nowrap transition-colors sm:text-xs ${
+                    vrPanoMode
+                      ? 'bg-[#7a9181] text-[#111412]'
+                      : 'border border-[#7a9181]/45 bg-[#202722] text-[#d6e4da] hover:bg-[#2a342d] hover:text-white'
+                  }`}
+                  title="VR 360° панорамный обзор через гироскоп и Oculus Quest 2 (V)"
+                >
+                  <Glasses className="h-3.5 w-3.5" />
+                  <span>VR 360°</span>
+                </button>
+
                 <div className="mx-0.5 h-5 w-px shrink-0 bg-white/10" aria-hidden="true" />
 
                 {CAMERA_PRESETS.map((preset) => {
-                  const isActive = !walkMode && activePreset === preset.id;
+                  const isActive = !walkMode && !vrPanoMode && activePreset === preset.id;
                   return (
                     <button
                       key={preset.id}
@@ -1171,7 +1302,7 @@ export function ControlDock({
                     type="button"
                     onClick={() => onChangeViewMode('cutaway')}
                     className={`px-2 py-1 text-[11px] font-medium whitespace-nowrap transition-colors sm:px-2.5 sm:text-xs ${
-                      !walkMode && viewMode === 'cutaway'
+                      !walkMode && !vrPanoMode && viewMode === 'cutaway'
                         ? 'bg-[#363b39] text-white'
                         : 'text-[#a3a19a] hover:text-[#e5e4de]'
                     }`}
@@ -1182,7 +1313,7 @@ export function ControlDock({
                     type="button"
                     onClick={() => onChangeViewMode('interior')}
                     className={`px-2 py-1 text-[11px] font-medium whitespace-nowrap transition-colors sm:px-2.5 sm:text-xs ${
-                      walkMode || viewMode === 'interior'
+                      walkMode || vrPanoMode || viewMode === 'interior'
                         ? 'bg-[#363b39] text-white'
                         : 'text-[#a3a19a] hover:text-[#e5e4de]'
                     }`}

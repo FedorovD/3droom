@@ -32,6 +32,23 @@ import {
   PersistedCameraState,
   savePersistedCameraState,
 } from '../state/storage';
+import {
+  checkImmersiveVrSupport,
+  findNearestVrViewpoint,
+  getVrViewpoint,
+  GyroPanoramaController,
+  GyroStatus,
+  VR_VIEWPOINTS,
+  VrViewpointId,
+} from '../scene/vrPanorama';
+
+export interface VrViewportActions {
+  startGyroFromGesture: (viewpointId?: VrViewpointId) => Promise<void>;
+  stopGyro: () => void;
+  enterWebXR: () => Promise<boolean>;
+  exitWebXR: () => Promise<void>;
+  toggleFullscreen: () => Promise<boolean>;
+}
 
 interface BathroomViewportProps {
   activePreset: CameraPresetId;
@@ -51,6 +68,14 @@ interface BathroomViewportProps {
   applyCameraRef?: MutableRefObject<
     ((cam: PersistedCameraState, targetWalkMode: boolean) => void) | null
   >;
+  vrPanoMode: boolean;
+  vrViewpoint: VrViewpointId;
+  vrRecenterTrigger: number;
+  onVrGyroStatusChange: (status: GyroStatus) => void;
+  onXrSupportChange: (supported: boolean) => void;
+  onXrSessionChange: (active: boolean) => void;
+  onVrViewpointChange: (id: VrViewpointId) => void;
+  vrActionsRef?: MutableRefObject<VrViewportActions | null>;
 }
 
 // Module-scope reusable math helpers (zero GC inside render loop)
@@ -75,6 +100,13 @@ const _boxCenter = new THREE.Vector3();
 const _expandedHitBox = new THREE.Box3();
 const _boxHit = new THREE.Vector3();
 const _invParentQuat = new THREE.Quaternion();
+const _xrTempMat4 = new THREE.Matrix4();
+const _xrRayOrigin = new THREE.Vector3();
+const _xrRayDir = new THREE.Vector3();
+const _xrFloorHit = new THREE.Vector3();
+const _xrHeadPos = new THREE.Vector3();
+const _xrForward = new THREE.Vector3();
+const _xrRight = new THREE.Vector3();
 
 function isMeshTransparent(obj: THREE.Object3D): boolean {
   const mat = (obj as THREE.Mesh).material;
@@ -145,6 +177,14 @@ export function BathroomViewport({
   onResetObject,
   captureCameraRef,
   applyCameraRef,
+  vrPanoMode,
+  vrViewpoint,
+  vrRecenterTrigger,
+  onVrGyroStatusChange,
+  onXrSupportChange,
+  onXrSessionChange,
+  onVrViewpointChange,
+  vrActionsRef,
 }: BathroomViewportProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
@@ -176,6 +216,15 @@ export function BathroomViewport({
   >(null);
   const syncSelectionHighlightRef = useRef<(() => void) | null>(null);
   const shadowDirtyRef = useRef<boolean>(false);
+  const vrPanoModeRef = useRef<boolean>(vrPanoMode);
+  const vrViewpointRef = useRef<VrViewpointId>(vrViewpoint);
+  const onVrGyroStatusRef = useRef(onVrGyroStatusChange);
+  const onXrSupportRef = useRef(onXrSupportChange);
+  const onXrSessionRef = useRef(onXrSessionChange);
+  const onVrViewpointChangeRef = useRef(onVrViewpointChange);
+  const syncVrPanoModeRef = useRef<((enabled: boolean) => void) | null>(null);
+  const moveVrViewpointRef = useRef<((id: VrViewpointId) => void) | null>(null);
+  const recenterVrRef = useRef<(() => void) | null>(null);
 
   const transitionRef = useRef<{
     active: boolean;
@@ -204,6 +253,22 @@ export function BathroomViewport({
   useEffect(() => {
     onResetObjectRef.current = onResetObject;
   }, [onResetObject]);
+
+  useEffect(() => {
+    onVrGyroStatusRef.current = onVrGyroStatusChange;
+  }, [onVrGyroStatusChange]);
+
+  useEffect(() => {
+    onXrSupportRef.current = onXrSupportChange;
+  }, [onXrSupportChange]);
+
+  useEffect(() => {
+    onXrSessionRef.current = onXrSessionChange;
+  }, [onXrSessionChange]);
+
+  useEffect(() => {
+    onVrViewpointChangeRef.current = onVrViewpointChange;
+  }, [onVrViewpointChange]);
 
   useEffect(() => {
     selectedIdRef.current = selectedObj?.id ?? null;
@@ -301,7 +366,7 @@ export function BathroomViewport({
   // Trigger smooth damped camera preset transition ONLY when user explicitly selects a preset
   useEffect(() => {
     if (presetTrigger === 0) return;
-    if (walkModeRef.current) return;
+    if (walkModeRef.current || vrPanoModeRef.current) return;
     const preset =
       CAMERA_PRESETS.find((p) => p.id === activePresetRef.current) ?? CAMERA_PRESETS[0];
     transitionRef.current = {
@@ -312,6 +377,30 @@ export function BathroomViewport({
     };
     requestRenderRef.current?.();
   }, [presetTrigger]);
+
+  // Sync VR 360° panoramic mode entry/exit
+  const didMountVrRef = useRef(false);
+  useEffect(() => {
+    vrPanoModeRef.current = vrPanoMode;
+    if (!didMountVrRef.current) {
+      didMountVrRef.current = true;
+      return;
+    }
+    syncVrPanoModeRef.current?.(vrPanoMode);
+  }, [vrPanoMode]);
+
+  // Move to selected panoramic room viewpoint
+  useEffect(() => {
+    vrViewpointRef.current = vrViewpoint;
+    if (!vrPanoModeRef.current) return;
+    moveVrViewpointRef.current?.(vrViewpoint);
+  }, [vrViewpoint]);
+
+  // Recenter gyroscope / panoramic heading on demand
+  useEffect(() => {
+    if (vrRecenterTrigger === 0) return;
+    recenterVrRef.current?.();
+  }, [vrRecenterTrigger]);
 
   // Mount Three.js WebGL scene once
   useEffect(() => {
@@ -380,6 +469,47 @@ export function BathroomViewport({
     selectionMat.transparent = true;
     selectionMat.opacity = 0.92;
     bathroom.scene.add(selectionHelper);
+
+    // VR Rig + Oculus Quest 2 controller laser pointers & floor teleport ring
+    const vrRig = new THREE.Group();
+    vrRig.name = 'VRRig';
+    vrRig.userData.ignoreRaycast = true;
+    bathroom.scene.add(vrRig);
+
+    const vrTeleportGeo = new THREE.RingGeometry(0.16, 0.215, 36);
+    const vrTeleportMat = new THREE.MeshBasicMaterial({
+      color: 0x9cb8a4,
+      transparent: true,
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const vrTeleportRing = new THREE.Mesh(vrTeleportGeo, vrTeleportMat);
+    vrTeleportRing.rotation.x = -Math.PI / 2;
+    vrTeleportRing.position.y = 0.015;
+    vrTeleportRing.visible = false;
+    vrTeleportRing.userData.ignoreRaycast = true;
+    bathroom.scene.add(vrTeleportRing);
+
+    const vrRayGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0, 0, -5),
+    ]);
+    const vrRayMat = new THREE.LineBasicMaterial({
+      color: 0x9cb8a4,
+      transparent: true,
+      opacity: 0.72,
+    });
+    const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
+    const xrControllerLines = xrControllers.map((ctrl) => {
+      const line = new THREE.Line(vrRayGeo, vrRayMat);
+      line.name = 'VRControllerRay';
+      line.visible = false;
+      line.userData.ignoreRaycast = true;
+      ctrl.add(line);
+      vrRig.add(ctrl);
+      return line;
+    });
 
     // Mandatory Studio PBR Environment Map via RoomEnvironment + PMREMGenerator
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -452,7 +582,48 @@ export function BathroomViewport({
     const persistedCamCache: PersistedCameraState = { ...savedCam };
     let lastCamSaveTime = 0;
 
+    // VR 360° panoramic state + WebXR (Oculus Quest 2) session state
+    const panoState = {
+      x: VR_VIEWPOINTS[0].x,
+      z: VR_VIEWPOINTS[0].z,
+      yaw: VR_VIEWPOINTS[0].initialYaw,
+      prevOrbitFov: startFov,
+      isDragging: false,
+      lastX: 0,
+      lastY: 0,
+      pointerId: null as number | null,
+    };
+
+    let xrPresenting = false;
+    let activeXrSession: XRSession | null = null;
+    let xrTeleportValid = false;
+    let xrTeleportX = panoState.x;
+    let xrTeleportZ = panoState.z;
+    let xrSnapReady = true;
+    let xrCycleBtnLatch = false;
+    let xrActiveAimCtrl = 1;
+    let xrLastTime = performance.now();
+
+    const gyroController = new GyroPanoramaController({
+      onStatusChange: (status) => {
+        onVrGyroStatusRef.current(status);
+      },
+      onSensorUpdate: () => {
+        if (vrPanoModeRef.current && !xrPresenting) {
+          requestRender();
+        }
+      },
+    });
+
+    // Detect Oculus Quest 2 / WebXR headset support once
+    void checkImmersiveVrSupport().then((supported) => {
+      if (!disposed) {
+        onXrSupportRef.current(supported);
+      }
+    });
+
     const persistCurrentCamera = (force = false) => {
+      if (vrPanoModeRef.current || xrPresenting) return;
       const now = performance.now();
       if (!force && now - lastCamSaveTime < 350) return;
       lastCamSaveTime = now;
@@ -645,6 +816,355 @@ export function BathroomViewport({
     };
     syncWalkModeRef.current = syncWalkMode;
 
+    const placePanoAtViewpoint = (id: VrViewpointId) => {
+      const vp = getVrViewpoint(id);
+      const safe = resolveWalkCollision(vp.x, vp.z);
+      panoState.x = safe.x;
+      panoState.z = safe.z;
+      panoState.yaw = vp.initialYaw;
+
+      if (xrPresenting) {
+        vrRig.position.set(safe.x, vrRig.position.y, safe.z);
+        vrRig.rotation.set(0, vp.initialYaw, 0);
+      } else if (vrPanoModeRef.current) {
+        camera.position.set(safe.x, PLAYER_EYE_HEIGHT, safe.z);
+        gyroController.recenter(vp.initialYaw);
+      }
+      onRoomChangeRef.current(getRoomNameAt(safe.x, safe.z));
+      shadowDirtyRef.current = true;
+      requestRender();
+    };
+
+    moveVrViewpointRef.current = placePanoAtViewpoint;
+
+    recenterVrRef.current = () => {
+      const vp = getVrViewpoint(vrViewpointRef.current);
+      if (xrPresenting) {
+        vrRig.rotation.set(0, vp.initialYaw, 0);
+      } else {
+        gyroController.recenter(vp.initialYaw);
+        requestRender();
+      }
+    };
+
+    const syncVrPanoMode = (enabled: boolean) => {
+      panoState.isDragging = false;
+      panoState.pointerId = null;
+
+      if (enabled) {
+        transitionRef.current.active = false;
+        setSelectedObj(null);
+        setMoveMode(false);
+        controls.enabled = false;
+        panoState.prevOrbitFov = camera.fov;
+
+        const vp = getVrViewpoint(vrViewpointRef.current);
+        const safe = resolveWalkCollision(vp.x, vp.z);
+        panoState.x = safe.x;
+        panoState.z = safe.z;
+        panoState.yaw = vp.initialYaw;
+
+        camera.position.set(safe.x, PLAYER_EYE_HEIGHT, safe.z);
+        camera.fov = 72;
+        camera.updateProjectionMatrix();
+
+        onRoomChangeRef.current(getRoomNameAt(safe.x, safe.z));
+        shadowDirtyRef.current = true;
+        requestRender();
+      } else {
+        gyroController.stop();
+        if (activeXrSession) {
+          void activeXrSession.end().catch(() => {});
+        }
+        // Exit cleanly back to Orbit Controls facing the current panoramic look direction
+        if (!walkModeRef.current) {
+          camera.getWorldDirection(_walkForward);
+          controls.target.copy(camera.position).addScaledVector(_walkForward, 1.8);
+          camera.fov = Math.max(35, Math.min(65, panoState.prevOrbitFov || 48));
+          camera.updateProjectionMatrix();
+          controls.enabled = true;
+          controls.update();
+        }
+        shadowDirtyRef.current = true;
+        requestRender();
+      }
+    };
+
+    syncVrPanoModeRef.current = syncVrPanoMode;
+
+    // Quest 2 Controller trigger -> instant floor teleport
+    const handleXrSelectStart = (ctrlIdx: number) => () => {
+      xrActiveAimCtrl = ctrlIdx;
+      if (!xrPresenting || !xrTeleportValid) return;
+
+      const xrCam = renderer.xr.getCamera();
+      xrCam.getWorldPosition(_xrHeadPos);
+      const dx = xrTeleportX - _xrHeadPos.x;
+      const dz = xrTeleportZ - _xrHeadPos.z;
+      const nextHead = resolveWalkCollision(_xrHeadPos.x + dx, _xrHeadPos.z + dz);
+      vrRig.position.x += nextHead.x - _xrHeadPos.x;
+      vrRig.position.z += nextHead.z - _xrHeadPos.z;
+      panoState.x = nextHead.x;
+      panoState.z = nextHead.z;
+      onRoomChangeRef.current(getRoomNameAt(nextHead.x, nextHead.z));
+    };
+
+    const xrSelectHandlers = [handleXrSelectStart(0), handleXrSelectStart(1)];
+    xrControllers[0].addEventListener('selectstart', xrSelectHandlers[0]);
+    xrControllers[1].addEventListener('selectstart', xrSelectHandlers[1]);
+
+    // Dedicated 72/90Hz stereoscopic WebXR frame loop (active ONLY while Quest 2 VR session is presenting)
+    const xrRenderFrame = (now: number) => {
+      if (disposed || !xrPresenting) return;
+      const dt = Math.min(Math.max((now - xrLastTime) / 1000, 0.001), 0.05);
+      xrLastTime = now;
+
+      const session = renderer.xr.getSession();
+      if (session) {
+        let moveForward = 0;
+        let moveStrafe = 0;
+        let snapInput = 0;
+        let cyclePressed = false;
+
+        for (let i = 0; i < session.inputSources.length; i++) {
+          const src = session.inputSources[i];
+          const gp = src.gamepad;
+          if (!gp || !gp.axes) continue;
+
+          // Quest 2 Touch thumbsticks map to axes[2] (X) and axes[3] (Y)
+          const axX = gp.axes.length >= 4 ? gp.axes[2] : gp.axes[0] ?? 0;
+          const axY = gp.axes.length >= 4 ? gp.axes[3] : gp.axes[1] ?? 0;
+
+          if (src.handedness === 'left') {
+            if (Math.abs(axX) > 0.16) moveStrafe += axX;
+            if (Math.abs(axY) > 0.16) moveForward -= axY;
+          } else if (src.handedness === 'right') {
+            if (Math.abs(axX) > 0.16) snapInput = axX;
+          } else {
+            if (Math.abs(axY) > 0.16) moveForward -= axY;
+          }
+
+          // Button A / X (index 4 on Quest 2 Touch) cycles apartment rooms
+          if (gp.buttons.length > 4 && gp.buttons[4]?.pressed) {
+            cyclePressed = true;
+          }
+        }
+
+        // Smooth collision-safe locomotion along XR headset gaze
+        if (moveForward !== 0 || moveStrafe !== 0) {
+          const xrCam = renderer.xr.getCamera();
+          xrCam.getWorldDirection(_xrForward);
+          _xrForward.y = 0;
+          if (_xrForward.lengthSq() > 1e-5) {
+            _xrForward.normalize();
+            _xrRight.crossVectors(_xrForward, _upAxis).normalize();
+            const speed = 1.85;
+            const len = Math.hypot(moveForward, moveStrafe);
+            const normF = len > 1 ? moveForward / len : moveForward;
+            const normS = len > 1 ? moveStrafe / len : moveStrafe;
+
+            xrCam.getWorldPosition(_xrHeadPos);
+            const desiredX = _xrHeadPos.x + (_xrForward.x * normF + _xrRight.x * normS) * speed * dt;
+            const desiredZ = _xrHeadPos.z + (_xrForward.z * normF + _xrRight.z * normS) * speed * dt;
+            const safe = resolveWalkCollision(desiredX, desiredZ);
+            vrRig.position.x += safe.x - _xrHeadPos.x;
+            vrRig.position.z += safe.z - _xrHeadPos.z;
+            panoState.x = safe.x;
+            panoState.z = safe.z;
+          }
+        }
+
+        // Comfortable 30° snap-turn on right thumbstick
+        if (Math.abs(snapInput) > 0.65 && xrSnapReady) {
+          xrSnapReady = false;
+          const angle = snapInput > 0 ? -Math.PI / 6 : Math.PI / 6;
+          const xrCam = renderer.xr.getCamera();
+          xrCam.getWorldPosition(_xrHeadPos);
+          const ox = _xrHeadPos.x - vrRig.position.x;
+          const oz = _xrHeadPos.z - vrRig.position.z;
+          const cosA = Math.cos(angle);
+          const sinA = Math.sin(angle);
+          const rx = ox * cosA + oz * sinA;
+          const rz = -ox * sinA + oz * cosA;
+          vrRig.rotation.y += angle;
+          vrRig.position.x += ox - rx;
+          vrRig.position.z += oz - rz;
+        } else if (Math.abs(snapInput) < 0.25) {
+          xrSnapReady = true;
+        }
+
+        // A / X button cycles through curated room panoramic viewpoints
+        if (cyclePressed && !xrCycleBtnLatch) {
+          xrCycleBtnLatch = true;
+          const idx = VR_VIEWPOINTS.findIndex((v) => v.id === vrViewpointRef.current);
+          const nextVp = VR_VIEWPOINTS[(idx + 1) % VR_VIEWPOINTS.length];
+          vrViewpointRef.current = nextVp.id;
+          onVrViewpointChangeRef.current(nextVp.id);
+          placePanoAtViewpoint(nextVp.id);
+        } else if (!cyclePressed) {
+          xrCycleBtnLatch = false;
+        }
+
+        // Update floor teleport pointer ray from active Quest 2 controller
+        xrTeleportValid = false;
+        const aimCtrl = xrControllers[xrActiveAimCtrl] ?? xrControllers[0];
+        if (aimCtrl && session.inputSources.length > 0) {
+          xrControllerLines[0].visible = true;
+          xrControllerLines[1].visible = true;
+          _xrTempMat4.identity().extractRotation(aimCtrl.matrixWorld);
+          _xrRayOrigin.setFromMatrixPosition(aimCtrl.matrixWorld);
+          _xrRayDir.set(0, 0, -1).applyMatrix4(_xrTempMat4).normalize();
+          _raycaster.set(_xrRayOrigin, _xrRayDir);
+          if (_raycaster.ray.intersectPlane(_floorPlane, _xrFloorHit)) {
+            const dist = Math.hypot(_xrFloorHit.x - _xrRayOrigin.x, _xrFloorHit.z - _xrRayOrigin.z);
+            if (dist > 0.25 && dist < 11 && isInsideApartment(_xrFloorHit.x, _xrFloorHit.z)) {
+              const safe = resolveWalkCollision(_xrFloorHit.x, _xrFloorHit.z);
+              xrTeleportX = safe.x;
+              xrTeleportZ = safe.z;
+              xrTeleportValid = true;
+              vrTeleportRing.position.set(safe.x, 0.015, safe.z);
+            }
+          }
+        }
+        vrTeleportRing.visible = xrTeleportValid;
+      }
+
+      const xrCam = renderer.xr.getCamera();
+      xrCam.getWorldPosition(_xrHeadPos);
+
+      const doorMoved = bathroom.updateBalconyDoor(true, _xrHeadPos, dt, false);
+      const cutawayChanged = bathroom.updateCutaway('interior', _xrHeadPos, activePresetRef.current);
+      if ((cutawayChanged || doorMoved || shadowDirtyRef.current) && renderer.shadowMap.enabled) {
+        renderer.shadowMap.needsUpdate = true;
+        shadowDirtyRef.current = false;
+      }
+
+      renderer.render(bathroom.scene, camera);
+    };
+
+    const enterWebXR = async (): Promise<boolean> => {
+      try {
+        const nav = navigator as Navigator & {
+          xr?: {
+            requestSession: (
+              mode: string,
+              opts?: { optionalFeatures?: string[] }
+            ) => Promise<XRSession>;
+          };
+        };
+        if (!nav.xr) return false;
+        if (activeXrSession) return true;
+
+        let useFloorSpace = true;
+        let session: XRSession;
+        try {
+          session = await nav.xr.requestSession('immersive-vr', {
+            optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+          });
+        } catch {
+          useFloorSpace = false;
+          session = await nav.xr.requestSession('immersive-vr', {
+            optionalFeatures: ['local'],
+          });
+        }
+
+        activeXrSession = session;
+        xrPresenting = true;
+        xrLastTime = performance.now();
+        gyroController.stop();
+        controls.enabled = false;
+
+        renderer.xr.enabled = true;
+        renderer.xr.setReferenceSpaceType(useFloorSpace ? 'local-floor' : 'local');
+
+        const safe = resolveWalkCollision(panoState.x, panoState.z);
+        vrRig.position.set(safe.x, useFloorSpace ? 0 : PLAYER_EYE_HEIGHT, safe.z);
+        vrRig.rotation.set(0, panoState.yaw, 0);
+        vrRig.add(camera);
+        camera.position.set(0, 0, 0);
+        camera.rotation.set(0, 0, 0);
+
+        session.addEventListener('end', () => {
+          xrPresenting = false;
+          activeXrSession = null;
+          xrTeleportValid = false;
+          vrTeleportRing.visible = false;
+          xrControllerLines[0].visible = false;
+          xrControllerLines[1].visible = false;
+          renderer.setAnimationLoop(null);
+          renderer.xr.enabled = false;
+
+          // Restore camera back into root scene at final VR world position
+          bathroom.scene.add(camera);
+          const finalPos = resolveWalkCollision(panoState.x, panoState.z);
+          camera.position.set(finalPos.x, PLAYER_EYE_HEIGHT, finalPos.z);
+          camera.aspect =
+            (container.clientWidth || window.innerWidth) /
+            (container.clientHeight || window.innerHeight);
+          camera.fov = vrPanoModeRef.current ? 72 : Math.max(35, Math.min(65, panoState.prevOrbitFov || 48));
+          camera.updateProjectionMatrix();
+
+          onXrSessionRef.current(false);
+          if (vrPanoModeRef.current) {
+            void gyroController.start(panoState.yaw);
+          } else if (!walkModeRef.current) {
+            controls.enabled = true;
+            controls.update();
+          }
+          shadowDirtyRef.current = true;
+          requestRender();
+        });
+
+        await renderer.xr.setSession(session);
+        onXrSessionRef.current(true);
+        renderer.setAnimationLoop(xrRenderFrame);
+        return true;
+      } catch (err) {
+        console.warn('WebXR session failed to start:', err);
+        xrPresenting = false;
+        activeXrSession = null;
+        renderer.xr.enabled = false;
+        return false;
+      }
+    };
+
+    const exitWebXR = async (): Promise<void> => {
+      if (activeXrSession) {
+        await activeXrSession.end().catch(() => {});
+      }
+    };
+
+    if (vrActionsRef) {
+      vrActionsRef.current = {
+        startGyroFromGesture: async (viewpointId?: VrViewpointId) => {
+          const targetVp = viewpointId
+            ? getVrViewpoint(viewpointId)
+            : findNearestVrViewpoint(camera.position.x, camera.position.z);
+          vrViewpointRef.current = targetVp.id;
+          onVrViewpointChangeRef.current(targetVp.id);
+          await gyroController.start(targetVp.initialYaw);
+          requestRender();
+        },
+        stopGyro: () => {
+          gyroController.stop();
+        },
+        enterWebXR,
+        exitWebXR,
+        toggleFullscreen: async () => {
+          try {
+            if (!document.fullscreenElement) {
+              await document.documentElement.requestFullscreen();
+              return true;
+            }
+            await document.exitFullscreen();
+            return false;
+          } catch {
+            return Boolean(document.fullscreenElement);
+          }
+        },
+      };
+    }
+
     // Cancel any scripted camera transition immediately when user interacts
     const onControlStart = () => {
       transitionRef.current.active = false;
@@ -826,6 +1346,7 @@ export function BathroomViewport({
     };
 
     const onDoubleClick = (e: MouseEvent) => {
+      if (vrPanoModeRef.current || xrPresenting) return;
       const rect = domEl.getBoundingClientRect();
       _ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       _ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1100,8 +1621,19 @@ export function BathroomViewport({
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      if (!walkModeRef.current || objDragState.active) return;
+      if (xrPresenting || objDragState.active) return;
       if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+      if (vrPanoModeRef.current) {
+        panoState.isDragging = true;
+        panoState.lastX = e.clientX;
+        panoState.lastY = e.clientY;
+        panoState.pointerId = e.pointerId;
+        domEl.setPointerCapture?.(e.pointerId);
+        return;
+      }
+
+      if (!walkModeRef.current) return;
       walkState.isDragging = true;
       walkState.dragMoved = false;
       walkState.downX = e.clientX;
@@ -1113,6 +1645,18 @@ export function BathroomViewport({
     };
 
     const onPointerMove = (e: PointerEvent) => {
+      if (vrPanoModeRef.current && panoState.isDragging) {
+        if (panoState.pointerId !== null && e.pointerId !== panoState.pointerId) return;
+        const dx = e.clientX - panoState.lastX;
+        const dy = e.clientY - panoState.lastY;
+        panoState.lastX = e.clientX;
+        panoState.lastY = e.clientY;
+        const dir = e.pointerType === 'touch' ? 1 : -1;
+        gyroController.addLookDelta(dir * dx * 0.0038, dir * dy * 0.0032);
+        requestRender();
+        return;
+      }
+
       if (!walkModeRef.current || !walkState.isDragging) return;
       if (walkState.pointerId !== null && e.pointerId !== walkState.pointerId) return;
 
@@ -1142,6 +1686,12 @@ export function BathroomViewport({
     };
 
     const finishPointer = (e: PointerEvent, allowClickWalk: boolean) => {
+      if (panoState.isDragging && (panoState.pointerId === null || e.pointerId === panoState.pointerId)) {
+        panoState.isDragging = false;
+        panoState.pointerId = null;
+        domEl.releasePointerCapture?.(e.pointerId);
+        return;
+      }
       if (!walkState.isDragging) return;
       if (walkState.pointerId !== null && e.pointerId !== walkState.pointerId) return;
       walkState.isDragging = false;
@@ -1234,14 +1784,17 @@ export function BathroomViewport({
     }
 
     function requestRender() {
-      if (disposed) return;
+      if (disposed || xrPresenting) return;
       if (renderBusy) {
         renderDirty = true;
         return;
       }
       renderBusy = true;
       frameId = requestAnimationFrame((now) => {
-        if (disposed) return;
+        if (disposed || xrPresenting) {
+          renderBusy = false;
+          return;
+        }
         renderDirty = false;
         // Avoid large idle-wake dt jump on the first frame after rest
         const dt = wasAnimating
@@ -1251,7 +1804,13 @@ export function BathroomViewport({
 
         let needsMoreFrames = false;
 
-        if (walkModeRef.current) {
+        if (vrPanoModeRef.current) {
+          camera.position.set(panoState.x, PLAYER_EYE_HEIGHT, panoState.z);
+          const gyroSettling = gyroController.updateCamera(camera, dt, isSoftwareGl);
+          if (gyroSettling) {
+            needsMoreFrames = true;
+          }
+        } else if (walkModeRef.current) {
           const keys = walkState.keys;
           const fwd =
             (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
@@ -1444,9 +2003,9 @@ export function BathroomViewport({
           }
         }
 
-        // Auto-open hinged balcony door leaf when approaching from either side in Walk Mode
+        // Auto-open hinged balcony door leaf when approaching from either side in Walk or VR mode
         const doorMoved = bathroom.updateBalconyDoor(
-          walkModeRef.current,
+          walkModeRef.current || vrPanoModeRef.current,
           camera.position,
           dt,
           isSoftwareGl
@@ -1458,7 +2017,7 @@ export function BathroomViewport({
         // Keep dynamic architectural cutaway aligned with current camera position & preset;
         // only invalidate cached shadow map if a wall/ceiling or door actually moved!
         const cutawayChanged = bathroom.updateCutaway(
-          walkModeRef.current ? 'interior' : viewModeRef.current,
+          walkModeRef.current || vrPanoModeRef.current ? 'interior' : viewModeRef.current,
           camera.position,
           activePresetRef.current
         );
@@ -1492,14 +2051,14 @@ export function BathroomViewport({
     requestRenderRef.current = requestRender;
 
     const onControlChange = () => {
-      if (!walkModeRef.current) {
+      if (!walkModeRef.current && !vrPanoModeRef.current && !xrPresenting) {
         requestRender();
       }
     };
     controls.addEventListener('change', onControlChange);
 
     const onResize = () => {
-      if (!container) return;
+      if (!container || xrPresenting) return;
       const w = container.clientWidth || window.innerWidth;
       const h = container.clientHeight || window.innerHeight;
       camera.aspect = w / h;
@@ -1573,6 +2132,17 @@ export function BathroomViewport({
       controls.removeEventListener('change', onControlChange);
       domEl.removeEventListener('webglcontextlost', onContextLost);
       domEl.removeEventListener('webglcontextrestored', onContextRestored);
+      gyroController.stop();
+      if (activeXrSession) {
+        void activeXrSession.end().catch(() => {});
+      }
+      renderer.setAnimationLoop(null);
+      xrControllers[0].removeEventListener('selectstart', xrSelectHandlers[0]);
+      xrControllers[1].removeEventListener('selectstart', xrSelectHandlers[1]);
+      vrTeleportGeo.dispose();
+      vrTeleportMat.dispose();
+      vrRayGeo.dispose();
+      vrRayMat.dispose();
       selectionHelper.dispose();
       walkMarkerGeo.dispose();
       walkMarkerMat.dispose();
@@ -1586,8 +2156,12 @@ export function BathroomViewport({
       controllerRef.current = null;
       requestRenderRef.current = null;
       syncWalkModeRef.current = null;
+      syncVrPanoModeRef.current = null;
+      moveVrViewpointRef.current = null;
+      recenterVrRef.current = null;
       if (captureCameraRef) captureCameraRef.current = null;
       if (applyCameraRef) applyCameraRef.current = null;
+      if (vrActionsRef) vrActionsRef.current = null;
       nudgeSelectedRef.current = null;
       syncSelectionHighlightRef.current = null;
     };

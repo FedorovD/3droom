@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BathroomViewport } from './components/BathroomViewport';
+import { BathroomViewport, VrViewportActions } from './components/BathroomViewport';
 import { ControlDock, SharedBannerState, SharePanelState } from './components/ControlDock';
 import {
   CuratedDesignPreset,
@@ -15,6 +15,7 @@ import {
   ViewMode,
 } from './scene/dimensions';
 import { ObjectEditsMap } from './scene/editableObjects';
+import { GyroStatus, VrViewpointId } from './scene/vrPanorama';
 import {
   copyTextToClipboard,
   createSharedScene,
@@ -37,6 +38,14 @@ export default function App() {
   const [activePreset, setActivePreset] = useState<CameraPresetId>(initialState.activePreset);
   const [presetTrigger, setPresetTrigger] = useState(0);
   const [walkMode, setWalkMode] = useState(initialState.walkMode);
+  const [vrPanoMode, setVrPanoMode] = useState(false);
+  const [vrViewpoint, setVrViewpoint] = useState<VrViewpointId>('living');
+  const [vrRecenterTrigger, setVrRecenterTrigger] = useState(0);
+  const [vrGyroStatus, setVrGyroStatus] = useState<GyroStatus>('idle');
+  const [xrSupported, setXrSupported] = useState(false);
+  const [xrSessionActive, setXrSessionActive] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   const [currentRoom, setCurrentRoom] = useState('Прихожая');
   const [viewMode, setViewMode] = useState<ViewMode>(initialState.viewMode);
   const [lightingMode, setLightingMode] = useState<LightingMode>(initialState.lightingMode);
@@ -53,6 +62,7 @@ export default function App() {
   const applyCameraRef = useRef<
     ((cam: PersistedCameraState, targetWalkMode: boolean) => void) | null
   >(null);
+  const vrActionsRef = useRef<VrViewportActions | null>(null);
 
   const [shareState, setShareState] = useState<SharePanelState>({
     status: 'idle',
@@ -61,6 +71,13 @@ export default function App() {
     error: '',
   });
   const [sharedBanner, setSharedBanner] = useState<SharedBannerState | null>(null);
+
+  // Track browser fullscreen state cleanly
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
 
   // Hydrate full environment + camera pose when opened via a shared link (?s=<shareId>)
   useEffect(() => {
@@ -84,6 +101,7 @@ export default function App() {
         }
 
         const { state: s, camera: cam } = result;
+        setVrPanoMode(false);
         setActivePreset(s.activePreset);
         setViewMode(s.viewMode);
         setLightingMode(s.lightingMode);
@@ -297,6 +315,7 @@ export default function App() {
 
   const handleSelectPreset = useCallback((id: CameraPresetId) => {
     const preset = CAMERA_PRESETS.find((p) => p.id === id);
+    setVrPanoMode(false);
     setWalkMode(false);
     setActivePreset(id);
     setPresetTrigger((n) => n + 1);
@@ -306,6 +325,7 @@ export default function App() {
   }, []);
 
   const handleToggleWalkMode = useCallback(() => {
+    setVrPanoMode(false);
     setWalkMode((prev) => {
       const next = !prev;
       if (next) {
@@ -315,14 +335,52 @@ export default function App() {
     });
   }, []);
 
+  const handleToggleVrPanoMode = useCallback(() => {
+    if (vrPanoMode) {
+      vrActionsRef.current?.stopGyro();
+      void vrActionsRef.current?.exitWebXR();
+      setVrPanoMode(false);
+      return;
+    }
+    // Start gyroscope sensor directly inside click gesture (required on iOS & Quest browsers)
+    setWalkMode(false);
+    setViewMode('interior');
+    setFinishMenuOpen(false);
+    setVrPanoMode(true);
+    void vrActionsRef.current?.startGyroFromGesture();
+  }, [vrPanoMode]);
+
+  const handleSelectVrViewpoint = useCallback((id: VrViewpointId) => {
+    setVrViewpoint(id);
+  }, []);
+
+  const handleRecenterVr = useCallback(() => {
+    setVrRecenterTrigger((n) => n + 1);
+  }, []);
+
+  const handleEnterWebXR = useCallback(() => {
+    if (!vrPanoMode) {
+      setWalkMode(false);
+      setViewMode('interior');
+      setFinishMenuOpen(false);
+      setVrPanoMode(true);
+    }
+    void vrActionsRef.current?.enterWebXR();
+  }, [vrPanoMode]);
+
+  const handleToggleFullscreen = useCallback(() => {
+    void vrActionsRef.current?.toggleFullscreen();
+  }, []);
+
   const handleChangeViewMode = useCallback((mode: ViewMode) => {
     if (mode === 'cutaway') {
       setWalkMode(false);
+      setVrPanoMode(false);
     }
     setViewMode(mode);
   }, []);
 
-  // Keyboard shortcuts: 1-9 for camera views, F for Walk Mode, Esc to close Share/Walk Mode, H to toggle HUD
+  // Keyboard shortcuts: 1-9 for camera views, F for Walk Mode, V for VR 360°, Esc to exit, H to toggle HUD
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -334,9 +392,15 @@ export default function App() {
           handleCloseSharePanel();
           return;
         }
+        if (vrPanoMode) {
+          handleToggleVrPanoMode();
+          return;
+        }
         setWalkMode(false);
       } else if (e.code === 'KeyF') {
         handleToggleWalkMode();
+      } else if (e.code === 'KeyV') {
+        handleToggleVrPanoMode();
       } else if (e.code === 'KeyH') {
         setDockCollapsed((prev) => !prev);
       } else {
@@ -348,7 +412,14 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleCloseSharePanel, handleSelectPreset, handleToggleWalkMode, shareState.status]);
+  }, [
+    handleCloseSharePanel,
+    handleSelectPreset,
+    handleToggleVrPanoMode,
+    handleToggleWalkMode,
+    shareState.status,
+    vrPanoMode,
+  ]);
 
   return (
     <main className="relative h-[100dvh] w-screen overflow-hidden bg-[#161817]">
@@ -368,6 +439,14 @@ export default function App() {
         onResetObject={handleResetObject}
         captureCameraRef={captureCameraRef}
         applyCameraRef={applyCameraRef}
+        vrPanoMode={vrPanoMode}
+        vrViewpoint={vrViewpoint}
+        vrRecenterTrigger={vrRecenterTrigger}
+        onVrGyroStatusChange={setVrGyroStatus}
+        onXrSupportChange={setXrSupported}
+        onXrSessionChange={setXrSessionActive}
+        onVrViewpointChange={setVrViewpoint}
+        vrActionsRef={vrActionsRef}
       />
 
       <ControlDock
@@ -375,6 +454,17 @@ export default function App() {
         onSelectPreset={handleSelectPreset}
         walkMode={walkMode}
         onToggleWalkMode={handleToggleWalkMode}
+        vrPanoMode={vrPanoMode}
+        onToggleVrPanoMode={handleToggleVrPanoMode}
+        vrViewpoint={vrViewpoint}
+        onSelectVrViewpoint={handleSelectVrViewpoint}
+        vrGyroStatus={vrGyroStatus}
+        onRecenterVr={handleRecenterVr}
+        xrSupported={xrSupported}
+        xrSessionActive={xrSessionActive}
+        onEnterWebXR={handleEnterWebXR}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={handleToggleFullscreen}
         currentRoom={currentRoom}
         viewMode={viewMode}
         onChangeViewMode={handleChangeViewMode}
