@@ -457,56 +457,233 @@ function createBalconyDoor(
   return { group: g, leafPivot, hingeLocalX, leafWidth: doorW };
 }
 
-/** Main apartment entrance door (Entry Hallway North exterior wall) */
+/** Main apartment entrance door (Entry Vestibule East exterior wall — sage-grey milled MDF inside matte black steel frame) */
 function createEntryDoor(
   width: number,
   height: number,
   depth: number,
-  mats: MaterialLibrary
+  mats: MaterialLibrary,
+  disposableMats: THREE.Material[]
 ): THREE.Group {
   const g = new THREE.Group();
+  g.name = 'EntrySecurityDoor';
 
-  // Dark steel perimeter jamb
-  const jambL = new THREE.Mesh(
-    new THREE.BoxGeometry(0.045, height, depth * 0.4),
-    mats.darkMetal
+  // Local architectural materials matching the real entrance door photo
+  const blackFrameMat = new THREE.MeshStandardMaterial({
+    color: 0x1b1d1f,
+    roughness: 0.44,
+    metalness: 0.48,
+    envMapIntensity: 0.72,
+  });
+  const outerTrimMat = new THREE.MeshStandardMaterial({
+    color: 0xb6babe,
+    roughness: 0.52,
+    metalness: 0.22,
+    envMapIntensity: 0.55,
+  });
+  const grooveShadowMat = new THREE.MeshStandardMaterial({
+    color: 0x5c6661,
+    roughness: 0.74,
+    metalness: 0.03,
+    envMapIntensity: 0.3,
+  });
+  const satinNickelMat = new THREE.MeshStandardMaterial({
+    color: 0xadb2b8,
+    roughness: 0.3,
+    metalness: 0.84,
+    envMapIntensity: 1.05,
+  });
+  const keyholeDarkMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1c1e,
+    roughness: 0.55,
+    metalness: 0.4,
+  });
+  disposableMats.push(blackFrameMat, outerTrimMat, grooveShadowMat, satinNickelMat, keyholeDarkMat);
+
+  const halfD = depth * 0.5;
+  const trimW = 0.028;
+  const trimBotH = 0.018;
+  const blackW = 0.026;
+  const blackBotH = 0.026;
+
+  // Helper to add a crisp 4-sided rectangular molding frame on the +Z face
+  const addMoldingFrame = (
+    cx: number,
+    cy: number,
+    frameW: number,
+    frameH: number,
+    barW: number,
+    barD: number,
+    zCenter: number,
+    mat: THREE.Material
+  ) => {
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(frameW, barW, barD), mat);
+    topBar.position.set(cx, cy + frameH * 0.5 - barW * 0.5, zCenter);
+    const botBar = new THREE.Mesh(new THREE.BoxGeometry(frameW, barW, barD), mat);
+    botBar.position.set(cx, cy - frameH * 0.5 + barW * 0.5, zCenter);
+    const sideH = Math.max(0.02, frameH - barW * 2);
+    const leftBar = new THREE.Mesh(new THREE.BoxGeometry(barW, sideH, barD), mat);
+    leftBar.position.set(cx - frameW * 0.5 + barW * 0.5, cy, zCenter);
+    const rightBar = new THREE.Mesh(new THREE.BoxGeometry(barW, sideH, barD), mat);
+    rightBar.position.set(cx + frameW * 0.5 - barW * 0.5, cy, zCenter);
+    topBar.receiveShadow = true;
+    botBar.receiveShadow = true;
+    leftBar.receiveShadow = true;
+    rightBar.receiveShadow = true;
+    g.add(topBar, botBar, leftBar, rightBar);
+  };
+
+  // 1) Slim outer light-grey steel/casing perimeter trim flush with interior wall plane (+halfD)
+  const trimDepth = 0.028;
+  const trimZ = halfD - trimDepth * 0.5 + 0.002;
+  const trimL = new THREE.Mesh(new THREE.BoxGeometry(trimW, height, trimDepth), outerTrimMat);
+  trimL.position.set(-width * 0.5 + trimW * 0.5, height * 0.5, trimZ);
+  const trimR = new THREE.Mesh(new THREE.BoxGeometry(trimW, height, trimDepth), outerTrimMat);
+  trimR.position.set(width * 0.5 - trimW * 0.5, height * 0.5, trimZ);
+  const trimTop = new THREE.Mesh(
+    new THREE.BoxGeometry(width - trimW * 2, trimW, trimDepth),
+    outerTrimMat
   );
-  jambL.position.set(-width * 0.5 + 0.022, height * 0.5, 0);
-  const jambR = new THREE.Mesh(
-    new THREE.BoxGeometry(0.045, height, depth * 0.4),
-    mats.darkMetal
+  trimTop.position.set(0, height - trimW * 0.5, trimZ);
+  const trimBot = new THREE.Mesh(
+    new THREE.BoxGeometry(width - trimW * 2, trimBotH, trimDepth),
+    outerTrimMat
   );
-  jambR.position.set(width * 0.5 - 0.022, height * 0.5, 0);
+  trimBot.position.set(0, trimBotH * 0.5, trimZ);
+  g.add(trimL, trimR, trimTop, trimBot);
+
+  // 2) Crisp matte black steel door box frame (коробка) + bottom threshold nested inside outer trim
+  const innerW = width - trimW * 2;
+  const innerH = height - trimW - trimBotH;
+  const boxDepth = depth * 0.62;
+  const boxZ = halfD - boxDepth * 0.5 - 0.006;
+
+  const jambL = new THREE.Mesh(new THREE.BoxGeometry(blackW, innerH, boxDepth), blackFrameMat);
+  jambL.position.set(-innerW * 0.5 + blackW * 0.5, trimBotH + innerH * 0.5, boxZ);
+  const jambR = new THREE.Mesh(new THREE.BoxGeometry(blackW, innerH, boxDepth), blackFrameMat);
+  jambR.position.set(innerW * 0.5 - blackW * 0.5, trimBotH + innerH * 0.5, boxZ);
   const jambTop = new THREE.Mesh(
-    new THREE.BoxGeometry(width, 0.045, depth * 0.4),
-    mats.darkMetal
+    new THREE.BoxGeometry(innerW - blackW * 2, blackW, boxDepth),
+    blackFrameMat
   );
-  jambTop.position.set(0, height - 0.022, 0);
+  jambTop.position.set(0, trimBotH + innerH - blackW * 0.5, boxZ);
+  const jambBot = new THREE.Mesh(
+    new THREE.BoxGeometry(innerW - blackW * 2, blackBotH, boxDepth),
+    blackFrameMat
+  );
+  jambBot.position.set(0, trimBotH + blackBotH * 0.5, boxZ);
+  jambL.receiveShadow = true;
+  jambR.receiveShadow = true;
+  jambTop.receiveShadow = true;
+  jambBot.receiveShadow = true;
+  g.add(jambL, jambR, jambTop, jambBot);
 
-  // Clean flush interior door leaf
+  // 3) Sage-grey MDF interior door leaf (recessed ~12 mm inside black steel frame for crisp shadow reveal)
+  const revealGap = 0.004;
+  const leafW = innerW - blackW * 2 - revealGap * 2;
+  const leafH = innerH - blackW - blackBotH - revealGap * 2;
+  const leafBottomY = trimBotH + blackBotH + revealGap;
+  const leafCenterY = leafBottomY + leafH * 0.5;
+  const leafThick = 0.072;
+  const leafFrontZ = halfD - 0.018;
+  const leafCenterZ = leafFrontZ - leafThick * 0.5;
+
   const leaf = new THREE.Mesh(
-    new THREE.BoxGeometry(width - 0.09, height - 0.055, 0.06),
+    new THREE.BoxGeometry(leafW, leafH, leafThick),
     mats.entryDoorMat
   );
-  leaf.position.set(0, (height - 0.055) * 0.5 + 0.01, 0.01);
+  leaf.position.set(0, leafCenterY, leafCenterZ);
   leaf.castShadow = true;
   leaf.receiveShadow = true;
+  g.add(leaf);
 
-  // Brushed chrome lever handle & deadbolt rose
-  const rose = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.024, 0.024, 0.012, 18),
-    mats.chromeBrushed
+  // Dark graphite exterior steel face (visible if orbiting behind the entrance wall)
+  const extFace = new THREE.Mesh(
+    new THREE.BoxGeometry(leafW, leafH, 0.008),
+    blackFrameMat
   );
-  rose.rotation.x = Math.PI / 2;
-  rose.position.set(-width * 0.5 + 0.1, 1.02, 0.044);
+  extFace.position.set(0, leafCenterY, leafCenterZ - leafThick * 0.5 - 0.002);
+  g.add(extFace);
 
-  const lever = new THREE.Mesh(
-    new THREE.BoxGeometry(0.11, 0.018, 0.022),
-    mats.chromeBrushed
+  // 4) Classic double-stepped vertical CNC-milled panel (филёнка) on interior face
+  const stileMargin = 0.114;
+  const railMargin = 0.14;
+  const outerPanelW = leafW - stileMargin * 2;
+  const outerPanelH = leafH - railMargin * 2;
+  const innerPanelW = outerPanelW - 0.074;
+  const innerPanelH = outerPanelH - 0.074;
+
+  // Outer recessed shadow groove + raised bevel step
+  addMoldingFrame(0, leafCenterY, outerPanelW, outerPanelH, 0.007, 0.002, leafFrontZ + 0.0012, grooveShadowMat);
+  addMoldingFrame(
+    0,
+    leafCenterY,
+    outerPanelW - 0.014,
+    outerPanelH - 0.014,
+    0.016,
+    0.0045,
+    leafFrontZ + 0.0024,
+    mats.entryDoorMat
   );
-  lever.position.set(-width * 0.5 + 0.145, 1.02, 0.068);
+  // Inner nested recessed shadow groove + inner step framing the tall central smooth panel
+  addMoldingFrame(0, leafCenterY, innerPanelW, innerPanelH, 0.006, 0.002, leafFrontZ + 0.0012, grooveShadowMat);
+  addMoldingFrame(
+    0,
+    leafCenterY,
+    innerPanelW - 0.012,
+    innerPanelH - 0.012,
+    0.012,
+    0.0038,
+    leafFrontZ + 0.0021,
+    mats.entryDoorMat
+  );
 
-  g.add(jambL, jambR, jambTop, leaf, rose, lever);
+  // 5) Satin brushed-silver hardware arranged vertically on LEFT stile (-X when viewed from inside vestibule)
+  const hwX = -leafW * 0.5 + stileMargin * 0.5;
+
+  // 5a. Upper lever-lock escutcheon (сувальдный замок) at y = 1.33 m
+  const upperLockY = leafBottomY + leafH * 0.635;
+  const upperPlate = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.062, 0.009), satinNickelMat);
+  upperPlate.position.set(hwX, upperLockY, leafFrontZ + 0.0045);
+  const upperSlot = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.0036, 0.002), keyholeDarkMat);
+  upperSlot.position.set(hwX, upperLockY, leafFrontZ + 0.0094);
+  g.add(upperPlate, upperSlot);
+
+  // 5b. Night latch turn-knob (ночная задвижка) at y = 1.17 m
+  const nightY = leafBottomY + leafH * 0.555;
+  const nightPlate = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.044, 0.009), satinNickelMat);
+  nightPlate.position.set(hwX, nightY, leafFrontZ + 0.0045);
+  const nightKnob = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.011, 0.016), satinNickelMat);
+  nightKnob.position.set(hwX, nightY, leafFrontZ + 0.016);
+  g.add(nightPlate, nightKnob);
+
+  // 5c. Modern square-rosette lever handle at y = 0.97 m (lever extends RIGHT toward door center)
+  const handleY = leafBottomY + leafH * 0.46;
+  const handleRose = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.048, 0.009), satinNickelMat);
+  handleRose.position.set(hwX, handleY, leafFrontZ + 0.0045);
+  const handleNeck = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.016, 0.034), satinNickelMat);
+  handleNeck.position.set(hwX, handleY, leafFrontZ + 0.025);
+  const handleLever = new THREE.Mesh(new THREE.BoxGeometry(0.122, 0.016, 0.014), satinNickelMat);
+  handleLever.position.set(hwX + 0.053, handleY, leafFrontZ + 0.046);
+  handleLever.castShadow = true;
+  g.add(handleRose, handleNeck, handleLever);
+
+  // 5d. Lower cylinder lock escutcheon right below lever handle at y = 0.88 m
+  const lowerLockY = handleY - 0.088;
+  const lowerPlate = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.054, 0.009), satinNickelMat);
+  lowerPlate.position.set(hwX, lowerLockY, leafFrontZ + 0.0045);
+  const lowerCyl = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.022, 0.002), keyholeDarkMat);
+  lowerCyl.position.set(hwX, lowerLockY, leafFrontZ + 0.0094);
+  g.add(lowerPlate, lowerCyl);
+
+  // 5e. Centered square satin-silver peephole (глазок) at eye level (~1.42 m)
+  const peepY = leafBottomY + leafH * 0.675;
+  const peepPlate = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.024, 0.006), satinNickelMat);
+  peepPlate.position.set(0, peepY, leafFrontZ + 0.003);
+  const peepCore = new THREE.Mesh(new THREE.BoxGeometry(0.011, 0.011, 0.002), keyholeDarkMat);
+  peepCore.position.set(0, peepY, leafFrontZ + 0.0064);
+  g.add(peepPlate, peepCore);
+
   return g;
 }
 
@@ -1504,12 +1681,14 @@ export function buildApartmentShell(
   northExtGroup.add(
     makeWhiteWall(APT.X_VEST_E, APT.X_VEST_E + VT, 0, H, APT.ENTRY_DOOR_Z1, APT.Z1 - BWT, mats)
   );
-  //   Front Entry Door assembly on East wall (1000 mm wide, handle on North side, hinged South opening East)
+  //   Front Entry Door assembly on East wall (1000 mm wide, handle on North/left side, hinged South opening East)
+  const entryDoorLocalMats: THREE.Material[] = [];
   const frontDoor = createEntryDoor(
     APT.ENTRY_DOOR_Z1 - APT.ENTRY_DOOR_Z0,
     APT.ENTRY_DOOR_H,
     VT,
-    mats
+    mats,
+    entryDoorLocalMats
   );
   frontDoor.rotation.y = -Math.PI / 2;
   frontDoor.position.set(
@@ -2675,6 +2854,7 @@ export function buildApartmentShell(
       });
       floorFinishCache.clear();
       kitchenDetailMats.forEach((m) => m.dispose());
+      entryDoorLocalMats.forEach((m) => m.dispose());
       plinthMat.dispose();
       shTex.dispose();
       contactShadowMat.dispose();

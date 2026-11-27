@@ -1183,6 +1183,11 @@ export function ControlDock({
                   </button>
                 </div>
               </div>
+              {xrSupported && (
+                <div className="mt-1.5 border-t border-white/8 pt-1 text-[10px] text-[#9eb0a3]">
+                  Quest 2: левый стик — ходьба · правый стик вверх — телепорт (навести и отпустить) · правый влево/вправо — поворот 30° · A/X — комнаты
+                </div>
+              )}
             </div>
           )}
 

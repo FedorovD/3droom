@@ -1280,10 +1280,10 @@ export function createMaterialLibrary(
   });
 
   const entryDoorMat = new THREE.MeshStandardMaterial({
-    color: 0xe6e5e0,
-    roughness: 0.58,
-    metalness: 0.08,
-    envMapIntensity: 0.45,
+    color: 0x7c8782,
+    roughness: 0.62,
+    metalness: 0.04,
+    envMapIntensity: 0.42,
   });
 
   const ceramicWhite = new THREE.MeshStandardMaterial({
