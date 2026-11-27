@@ -1,5 +1,5 @@
 import { MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Check, Move, RotateCcw, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, Move, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -20,6 +20,7 @@ import {
   isEffectivelyVisible,
   ObjectEditsMap,
 } from '../scene/editableObjects';
+import { getVariantsForType, getVariantThumbnail } from '../scene/objectCatalog';
 import {
   getInitialWalkPose,
   getRoomNameAt,
@@ -63,6 +64,7 @@ interface BathroomViewportProps {
   onCurrentRoomChange: (room: string) => void;
   objectEdits: ObjectEditsMap;
   onMoveObject: (id: string, offset: [number, number, number]) => void;
+  onReplaceObject: (id: string, variantId: string | null) => void;
   onDeleteObject: (id: string) => void;
   onResetObject: (id: string) => void;
   captureCameraRef?: MutableRefObject<(() => PersistedCameraState) | null>;
@@ -183,6 +185,7 @@ export function BathroomViewport({
   onCurrentRoomChange,
   objectEdits,
   onMoveObject,
+  onReplaceObject,
   onDeleteObject,
   onResetObject,
   captureCameraRef,
@@ -200,9 +203,10 @@ export function BathroomViewport({
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const [webglError, setWebglError] = useState(false);
 
-  // Double-click selected object state & move mode
+  // Double-click selected object state, move mode & replace picker
   const [selectedObj, setSelectedObj] = useState<EditableMeta | null>(null);
   const [moveMode, setMoveMode] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
   const [moveAxis, setMoveAxis] = useState<'xz' | 'y'>('xz');
   const [isDraggingObj, setIsDraggingObj] = useState(false);
 
@@ -214,6 +218,7 @@ export function BathroomViewport({
   const onRoomChangeRef = useRef(onCurrentRoomChange);
   const objectEditsRef = useRef<ObjectEditsMap>(objectEdits);
   const onMoveObjectRef = useRef(onMoveObject);
+  const onReplaceObjectRef = useRef(onReplaceObject);
   const onDeleteObjectRef = useRef(onDeleteObject);
   const onResetObjectRef = useRef(onResetObject);
   const selectedIdRef = useRef<string | null>(null);
@@ -257,6 +262,10 @@ export function BathroomViewport({
   }, [onMoveObject]);
 
   useEffect(() => {
+    onReplaceObjectRef.current = onReplaceObject;
+  }, [onReplaceObject]);
+
+  useEffect(() => {
     onDeleteObjectRef.current = onDeleteObject;
   }, [onDeleteObject]);
 
@@ -282,6 +291,7 @@ export function BathroomViewport({
 
   useEffect(() => {
     selectedIdRef.current = selectedObj?.id ?? null;
+    setReplaceOpen(false);
     syncSelectionHighlightRef.current?.();
     const raf = requestAnimationFrame(() => requestRenderRef.current?.());
     return () => cancelAnimationFrame(raf);
@@ -293,6 +303,11 @@ export function BathroomViewport({
     const raf = requestAnimationFrame(() => requestRenderRef.current?.());
     return () => cancelAnimationFrame(raf);
   }, [moveMode]);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => requestRenderRef.current?.());
+    return () => cancelAnimationFrame(raf);
+  }, [replaceOpen]);
 
   useEffect(() => {
     moveAxisRef.current = moveAxis;
@@ -2530,6 +2545,7 @@ export function BathroomViewport({
   const handleCloseSelection = useCallback(() => {
     setSelectedObj(null);
     setMoveMode(false);
+    setReplaceOpen(false);
     setMoveAxis('xz');
   }, []);
 
@@ -2538,6 +2554,7 @@ export function BathroomViewport({
     onDeleteObjectRef.current(selectedObj.id);
     setSelectedObj(null);
     setMoveMode(false);
+    setReplaceOpen(false);
     setMoveAxis('xz');
   }, [selectedObj]);
 
@@ -2546,13 +2563,40 @@ export function BathroomViewport({
     onResetObjectRef.current(selectedObj.id);
   }, [selectedObj]);
 
+  const handleToggleMoveMode = useCallback(() => {
+    setMoveMode((prev) => {
+      const next = !prev;
+      if (next) setReplaceOpen(false);
+      return next;
+    });
+  }, []);
+
+  const handleToggleReplace = useCallback(() => {
+    setReplaceOpen((prev) => {
+      const next = !prev;
+      if (next) setMoveMode(false);
+      return next;
+    });
+  }, []);
+
+  const handlePickReplacement = useCallback(
+    (variantId: string | null) => {
+      if (!selectedObj) return;
+      onReplaceObjectRef.current(selectedObj.id, variantId);
+    },
+    [selectedObj]
+  );
+
   const activeOffset = selectedObj ? objectEdits[selectedObj.id]?.offset : undefined;
+  const activeVariantId = selectedObj ? objectEdits[selectedObj.id]?.variant : undefined;
   const hasMovedOffset = Boolean(
     activeOffset &&
       (Math.abs(activeOffset[0]) >= 0.001 ||
         Math.abs(activeOffset[1]) >= 0.001 ||
         Math.abs(activeOffset[2]) >= 0.001)
   );
+  const hasAnyObjectEdit = hasMovedOffset || Boolean(activeVariantId);
+  const replacementOptions = selectedObj ? getVariantsForType(selectedObj.type) : [];
 
   if (webglError) {
     return (
@@ -2584,7 +2628,7 @@ export function BathroomViewport({
         }`}
       />
 
-      {/* Screen-Anchored Floating Object Action Bar (Move / Reset / Delete) */}
+      {/* Screen-Anchored Floating Object Action Bar (Move / Replace / Reset / Delete) */}
       <div
         ref={overlayRef}
         onPointerDown={(e) => e.stopPropagation()}
@@ -2600,16 +2644,23 @@ export function BathroomViewport({
       >
         {selectedObj && (
           <div className="border border-white/16 bg-[#171918]/96 shadow-2xl">
-            {/* Object Title + Close */}
+            {/* Object Title + Type Tag + Close */}
             <div className="flex items-center justify-between gap-3 border-b border-white/10 px-2.5 py-1.5">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span
                   className={`h-1.5 w-1.5 shrink-0 ${
-                    moveMode ? 'bg-[#e4b468]' : 'bg-[#9cb8a4]'
+                    moveMode
+                      ? 'bg-[#e4b468]'
+                      : replaceOpen
+                        ? 'bg-[#7a9181]'
+                        : 'bg-[#9cb8a4]'
                   }`}
                 />
-                <span className="max-w-[200px] truncate text-[11px] font-semibold text-[#f0efec]">
+                <span className="max-w-[168px] truncate text-[11px] font-semibold text-[#f0efec]">
                   {selectedObj.label}
+                </span>
+                <span className="shrink-0 border border-white/10 bg-[#202422] px-1.5 py-0.5 text-[9.5px] font-medium text-[#9eb2a4]">
+                  {selectedObj.typeLabel}
                 </span>
               </div>
               <button
@@ -2623,11 +2674,11 @@ export function BathroomViewport({
               </button>
             </div>
 
-            {/* Action Buttons Row */}
-            <div className="flex items-center gap-1 p-1.5">
+            {/* Action Buttons Row: Move | Replace | Reset | Delete */}
+            <div className="flex flex-wrap items-center gap-1 p-1.5">
               <button
                 type="button"
-                onClick={() => setMoveMode((v) => !v)}
+                onClick={handleToggleMoveMode}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap transition-colors ${
                   moveMode
                     ? 'bg-[#e4b468] text-[#151614]'
@@ -2647,12 +2698,29 @@ export function BathroomViewport({
                 )}
               </button>
 
-              {hasMovedOffset && (
+              {replacementOptions.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleToggleReplace}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap transition-colors ${
+                    replaceOpen
+                      ? 'bg-[#7a9181] text-[#111412]'
+                      : activeVariantId
+                        ? 'border border-[#7a9181]/60 bg-[#222c25] text-[#dcebe0] hover:bg-[#2b3930] hover:text-white'
+                        : 'bg-[#232826] text-[#e3e8e4] hover:bg-[#2f3733] hover:text-white'
+                  }`}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>Заменить</span>
+                </button>
+              )}
+
+              {hasAnyObjectEdit && (
                 <button
                   type="button"
                   onClick={handleResetSelected}
                   className="flex items-center gap-1 bg-[#222524] px-2 py-1.5 text-[11px] font-medium text-[#c8c6bf] transition-colors hover:bg-[#2d312f] hover:text-white"
-                  title="Вернуть на исходное место"
+                  title="Вернуть исходный вид и положение"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>Сброс</span>
@@ -2668,6 +2736,73 @@ export function BathroomViewport({
                 <span>Удалить</span>
               </button>
             </div>
+
+            {/* Same-Type Replacement Catalog with Mini Photos */}
+            {replaceOpen && replacementOptions.length > 0 && (
+              <div className="w-[276px] border-t border-white/10 bg-[#141715] p-2 sm:w-[310px]">
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-semibold tracking-wide text-[#aebcb2] uppercase">
+                    {selectedObj.typeLabel} · {replacementOptions.length} вар.
+                  </span>
+                  {activeVariantId && (
+                    <button
+                      type="button"
+                      onClick={() => handlePickReplacement(null)}
+                      className="text-[10px] font-medium text-[#9cb8a4] transition-colors hover:text-white"
+                    >
+                      Оригинал
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid max-h-[246px] grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
+                  {replacementOptions.map((opt) => {
+                    const isSelected = activeVariantId === opt.id;
+                    const thumbSrc = getVariantThumbnail(opt);
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handlePickReplacement(opt.id)}
+                        className={`group flex flex-col overflow-hidden border text-left transition-colors ${
+                          isSelected
+                            ? 'border-[#7a9181] bg-[#222c25]'
+                            : 'border-white/10 bg-[#1b1f1d] hover:border-white/25 hover:bg-[#232825]'
+                        }`}
+                      >
+                        <div className="relative h-[62px] w-full overflow-hidden border-b border-white/8 bg-[#191c1b]">
+                          {thumbSrc && (
+                            <img
+                              src={thumbSrc}
+                              alt={opt.label}
+                              className="h-full w-full object-cover"
+                              draggable={false}
+                            />
+                          )}
+                          {isSelected && (
+                            <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center bg-[#7a9181] text-[#111412] shadow">
+                              <Check className="h-2.5 w-2.5" />
+                            </span>
+                          )}
+                        </div>
+                        <div className="px-1.5 py-1">
+                          <div
+                            className={`truncate text-[10.5px] leading-tight font-semibold ${
+                              isSelected ? 'text-white' : 'text-[#e6e4dd]'
+                            }`}
+                          >
+                            {opt.label}
+                          </div>
+                          <div className="mt-0.5 truncate text-[9px] leading-tight text-[#96948d]">
+                            {opt.subtitle}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Move Mode Controls & Height Toggle (for wall-hung / XYZ objects) */}
             {moveMode && (

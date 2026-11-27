@@ -13,6 +13,7 @@ import {
   Maximize2,
   Minimize2,
   Moon,
+  RefreshCw,
   RotateCcw,
   Ruler,
   Share2,
@@ -41,7 +42,18 @@ import {
   LightingMode,
   ViewMode,
 } from '../scene/dimensions';
-import { getEditableLabel, ObjectEditsMap } from '../scene/editableObjects';
+import {
+  ALL_EDITABLE_IDS,
+  getEditableLabel,
+  ObjectEditsMap,
+} from '../scene/editableObjects';
+import {
+  EditableObjectType,
+  getVariantById,
+  getVariantsForType,
+  getVariantThumbnail,
+  groupEditableIdsByType,
+} from '../scene/objectCatalog';
 import { GyroStatus, VR_VIEWPOINTS, VrViewpointId } from '../scene/vrPanorama';
 import { DesignTab, WallZoneTab } from '../state/storage';
 
@@ -95,6 +107,7 @@ interface ControlDockProps {
   wallZoneTab: WallZoneTab;
   onChangeWallZoneTab: (tab: WallZoneTab) => void;
   objectEdits: ObjectEditsMap;
+  onReplaceObject: (id: string, variantId: string | null) => void;
   onResetObjects: (ids: string[]) => void;
   shareState: SharePanelState;
   onShareScene: () => void;
@@ -141,6 +154,7 @@ export function ControlDock({
   wallZoneTab,
   onChangeWallZoneTab,
   objectEdits,
+  onReplaceObject,
   onResetObjects,
   shareState,
   onShareScene,
@@ -150,9 +164,14 @@ export function ControlDock({
 }: ControlDockProps) {
   const [restoreListOpen, setRestoreListOpen] = useState(false);
   const [selectedRestoreIds, setSelectedRestoreIds] = useState<string[]>([]);
+  const [catalogGroupsOpen, setCatalogGroupsOpen] = useState(false);
+  const [openTypeGroup, setOpenTypeGroup] = useState<EditableObjectType | null>(null);
+  const [activeCatalogItemId, setActiveCatalogItemId] = useState<string | null>(null);
 
   const editedEntries = Object.entries(objectEdits);
   const editedObjectsCount = editedEntries.length;
+  const groupedEdited = groupEditableIdsByType(editedEntries.map(([id]) => id));
+  const groupedAllEditable = groupEditableIdsByType(ALL_EDITABLE_IDS);
 
   // Keep checked IDs synchronized with currently edited objects and close panel when empty
   useEffect(() => {
@@ -388,70 +407,86 @@ export function ControlDock({
 
                     {restoreListOpen && (
                       <div className="border-t border-white/10 bg-[#141715] p-1.5">
-                        <div className="max-h-40 space-y-1 overflow-y-auto pr-0.5">
-                          {editedEntries.map(([id, edit]) => {
-                            const checked = selectedRestoreIds.includes(id);
-                            const hasOffset = Boolean(
-                              edit.offset &&
-                                (Math.abs(edit.offset[0]) >= 0.001 ||
-                                  Math.abs(edit.offset[1]) >= 0.001 ||
-                                  Math.abs(edit.offset[2]) >= 0.001)
-                            );
-                            const isDeleted = Boolean(edit.deleted);
-                            const statusText =
-                              isDeleted && hasOffset
-                                ? 'Удалён · сдвинут'
-                                : isDeleted
-                                  ? 'Удалён'
-                                  : 'Сдвинут';
+                        <div className="max-h-48 space-y-2 overflow-y-auto pr-0.5">
+                          {groupedEdited.map((grp) => (
+                            <div key={grp.type} className="space-y-1">
+                              <div className="flex items-center justify-between px-0.5 text-[9.5px] font-semibold tracking-wide text-[#93a699] uppercase">
+                                <span>{grp.info.label}</span>
+                                <span className="font-mono-nums text-[#758279]">
+                                  {grp.ids.length}
+                                </span>
+                              </div>
+                              {grp.ids.map((id) => {
+                                const edit = objectEdits[id];
+                                if (!edit) return null;
+                                const checked = selectedRestoreIds.includes(id);
+                                const hasOffset = Boolean(
+                                  edit.offset &&
+                                    (Math.abs(edit.offset[0]) >= 0.001 ||
+                                      Math.abs(edit.offset[1]) >= 0.001 ||
+                                      Math.abs(edit.offset[2]) >= 0.001)
+                                );
+                                const isDeleted = Boolean(edit.deleted);
+                                const variantSpec = getVariantById(edit.variant);
+                                const statusParts: string[] = [];
+                                if (isDeleted) statusParts.push('Удалён');
+                                if (variantSpec) statusParts.push(`Заменён: ${variantSpec.label}`);
+                                if (hasOffset) statusParts.push('Сдвинут');
+                                const statusText = statusParts.join(' · ') || 'Изменён';
 
-                            return (
-                              <div
-                                key={id}
-                                className={`flex items-center justify-between gap-1.5 border px-1.5 py-1 transition-colors ${
-                                  checked
-                                    ? 'border-[#7a9181]/70 bg-[#202923]'
-                                    : 'border-white/8 bg-[#1b1e1d] hover:border-white/15'
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => toggleRestoreId(id)}
-                                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                                >
-                                  <span
-                                    className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${
+                                return (
+                                  <div
+                                    key={id}
+                                    className={`flex items-center justify-between gap-1.5 border px-1.5 py-1 transition-colors ${
                                       checked
-                                        ? 'border-[#7a9181] bg-[#7a9181] text-[#111412]'
-                                        : 'border-white/25 bg-transparent'
+                                        ? 'border-[#7a9181]/70 bg-[#202923]'
+                                        : 'border-white/8 bg-[#1b1e1d] hover:border-white/15'
                                     }`}
                                   >
-                                    {checked && <Check className="h-2.5 w-2.5" />}
-                                  </span>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate text-[10.5px] leading-tight font-medium text-[#e9e7e0]">
-                                      {getEditableLabel(id)}
-                                    </div>
-                                    <div
-                                      className={`text-[9.5px] leading-tight ${
-                                        isDeleted ? 'text-[#e09d9d]' : 'text-[#d9b87a]'
-                                      }`}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleRestoreId(id)}
+                                      className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
                                     >
-                                      {statusText}
-                                    </div>
+                                      <span
+                                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${
+                                          checked
+                                            ? 'border-[#7a9181] bg-[#7a9181] text-[#111412]'
+                                            : 'border-white/25 bg-transparent'
+                                        }`}
+                                      >
+                                        {checked && <Check className="h-2.5 w-2.5" />}
+                                      </span>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate text-[10.5px] leading-tight font-medium text-[#e9e7e0]">
+                                          {getEditableLabel(id)}
+                                        </div>
+                                        <div
+                                          className={`truncate text-[9.5px] leading-tight ${
+                                            isDeleted
+                                              ? 'text-[#e09d9d]'
+                                              : variantSpec
+                                                ? 'text-[#a8c5b1]'
+                                                : 'text-[#d9b87a]'
+                                          }`}
+                                        >
+                                          {statusText}
+                                        </div>
+                                      </div>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => onResetObjects([id])}
+                                      className="shrink-0 border border-white/10 bg-[#232826] px-1.5 py-0.5 text-[9.5px] font-medium text-[#cfd9d2] transition-colors hover:border-[#7a9181]/60 hover:bg-[#2b352e] hover:text-white"
+                                      title="Вернуть этот объект"
+                                    >
+                                      Вернуть
+                                    </button>
                                   </div>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => onResetObjects([id])}
-                                  className="shrink-0 border border-white/10 bg-[#232826] px-1.5 py-0.5 text-[9.5px] font-medium text-[#cfd9d2] transition-colors hover:border-[#7a9181]/60 hover:bg-[#2b352e] hover:text-white"
-                                  title="Вернуть этот объект"
-                                >
-                                  Вернуть
-                                </button>
-                              </div>
-                            );
-                          })}
+                                );
+                              })}
+                            </div>
+                          ))}
                         </div>
 
                         <div className="mt-1.5 flex items-center justify-between gap-1.5 border-t border-white/10 pt-1.5">
@@ -1001,8 +1036,193 @@ export function ControlDock({
                       </button>
                     </section>
 
+                    {/* All Editable Objects Grouped by Type with Inline Mini-Photo Replacement */}
+                    <section
+                      aria-label="Редактируемые предметы по типам"
+                      className="border border-white/10 bg-[#191d1b]"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setCatalogGroupsOpen((v) => !v)}
+                        aria-expanded={catalogGroupsOpen}
+                        className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left transition-colors hover:bg-[#212724]"
+                      >
+                        <div>
+                          <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#e9e7e0]">
+                            <RefreshCw className="h-3.5 w-3.5 text-[#9cb8a4]" />
+                            <span>Предметы по типам ({ALL_EDITABLE_IDS.length})</span>
+                          </div>
+                          <div className="text-[9.5px] text-[#96948d]">
+                            Группировка и замена с мини-фото по типу предмета
+                          </div>
+                        </div>
+                        {catalogGroupsOpen ? (
+                          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-[#9cb8a4]" />
+                        ) : (
+                          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#9cb8a4]" />
+                        )}
+                      </button>
+
+                      {catalogGroupsOpen && (
+                        <div className="divide-y divide-white/8 border-t border-white/10 bg-[#141715]">
+                          {groupedAllEditable.map((grp) => {
+                            const isOpen = openTypeGroup === grp.type;
+                            const variants = getVariantsForType(grp.type);
+                            const replacedInGroup = grp.ids.filter((id) =>
+                              Boolean(objectEdits[id]?.variant)
+                            ).length;
+
+                            return (
+                              <div key={grp.type}>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setOpenTypeGroup((cur) => (cur === grp.type ? null : grp.type))
+                                  }
+                                  className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-[#1e2320]"
+                                >
+                                  <span className="truncate text-[10.5px] font-semibold text-[#d9ddd9]">
+                                    {grp.info.label}
+                                  </span>
+                                  <span className="flex shrink-0 items-center gap-1.5">
+                                    {replacedInGroup > 0 && (
+                                      <span className="font-mono-nums bg-[#243228] px-1 py-0.5 text-[9px] font-semibold text-[#a5c6af]">
+                                        {replacedInGroup} зам.
+                                      </span>
+                                    )}
+                                    <span className="font-mono-nums text-[9.5px] text-[#838b85]">
+                                      {grp.ids.length}
+                                    </span>
+                                    {isOpen ? (
+                                      <ChevronUp className="h-3 w-3 text-[#9cb8a4]" />
+                                    ) : (
+                                      <ChevronDown className="h-3 w-3 text-[#7f8781]" />
+                                    )}
+                                  </span>
+                                </button>
+
+                                {isOpen && (
+                                  <div className="space-y-1 bg-[#121514] px-2 py-1.5">
+                                    {grp.ids.map((id) => {
+                                      const edit = objectEdits[id];
+                                      const activeVar = getVariantById(edit?.variant);
+                                      const isItemExpanded = activeCatalogItemId === id;
+                                      const activeThumb = activeVar
+                                        ? getVariantThumbnail(activeVar)
+                                        : '';
+
+                                      return (
+                                        <div
+                                          key={id}
+                                          className="border border-white/8 bg-[#191d1b]"
+                                        >
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setActiveCatalogItemId((cur) =>
+                                                cur === id ? null : id
+                                              )
+                                            }
+                                            className="flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left transition-colors hover:bg-[#212724]"
+                                          >
+                                            <div className="flex min-w-0 items-center gap-2">
+                                              {activeThumb ? (
+                                                <img
+                                                  src={activeThumb}
+                                                  alt={activeVar?.label ?? ''}
+                                                  className="h-6 w-8 shrink-0 border border-white/15 object-cover"
+                                                />
+                                              ) : (
+                                                <span className="flex h-6 w-8 shrink-0 items-center justify-center border border-white/10 bg-[#202422] text-[8.5px] text-[#838a85]">
+                                                  База
+                                                </span>
+                                              )}
+                                              <div className="min-w-0">
+                                                <div className="truncate text-[10.5px] leading-tight font-medium text-[#e9e7e0]">
+                                                  {getEditableLabel(id)}
+                                                </div>
+                                                <div className="truncate text-[9px] leading-tight text-[#8f9d93]">
+                                                  {edit?.deleted
+                                                    ? 'Удалён (нажмите вариант, чтобы вернуть)'
+                                                    : activeVar
+                                                      ? activeVar.label
+                                                      : 'Оригинал'}
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <span className="shrink-0 text-[9.5px] font-medium text-[#9cb8a4]">
+                                              {isItemExpanded ? 'Скрыть' : 'Заменить'}
+                                            </span>
+                                          </button>
+
+                                          {isItemExpanded && variants.length > 0 && (
+                                            <div className="border-t border-white/8 bg-[#141715] p-1.5">
+                                              <div className="mb-1 flex items-center justify-between">
+                                                <span className="text-[9px] text-[#8b938d]">
+                                                  Выберите замену ({grp.info.shortLabel})
+                                                </span>
+                                                {activeVar && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => onReplaceObject(id, null)}
+                                                    className="text-[9px] font-medium text-[#9cb8a4] hover:text-white"
+                                                  >
+                                                    Оригинал
+                                                  </button>
+                                                )}
+                                              </div>
+                                              <div className="grid grid-cols-2 gap-1">
+                                                {variants.map((opt) => {
+                                                  const isCur = edit?.variant === opt.id;
+                                                  const thumb = getVariantThumbnail(opt);
+                                                  return (
+                                                    <button
+                                                      key={opt.id}
+                                                      type="button"
+                                                      onClick={() => onReplaceObject(id, opt.id)}
+                                                      className={`overflow-hidden border text-left transition-colors ${
+                                                        isCur
+                                                          ? 'border-[#7a9181] bg-[#222c25]'
+                                                          : 'border-white/8 bg-[#1b1f1d] hover:border-white/25'
+                                                      }`}
+                                                    >
+                                                      <div className="relative h-12 w-full overflow-hidden border-b border-white/8">
+                                                        {thumb && (
+                                                          <img
+                                                            src={thumb}
+                                                            alt={opt.label}
+                                                            className="h-full w-full object-cover"
+                                                          />
+                                                        )}
+                                                        {isCur && (
+                                                          <span className="absolute top-0.5 right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-[#7a9181] text-[#111412]">
+                                                            <Check className="h-2.5 w-2.5" />
+                                                          </span>
+                                                        )}
+                                                      </div>
+                                                      <div className="truncate px-1.5 py-1 text-[9.5px] font-medium text-[#e4e2db]">
+                                                        {opt.label}
+                                                      </div>
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </section>
+
                     <p className="border-t border-white/8 pt-2 text-[10px] leading-snug text-[#8f8d86]">
-                      Двойной клик по любому предмету в 3D — переместить или удалить.
+                      Двойной клик по любому предмету в 3D — переместить, заменить или удалить.
                     </p>
                   </div>
                 )}

@@ -255,7 +255,7 @@ export default function App() {
           Math.abs(rounded[1]) < 0.001 &&
           Math.abs(rounded[2]) < 0.001;
         const existing = prev[id];
-        if (isZero && !existing?.deleted) {
+        if (isZero && !existing?.deleted && !existing?.variant) {
           if (!(id in prev)) return prev;
           const next = { ...prev };
           delete next[id];
@@ -272,6 +272,27 @@ export default function App() {
     },
     []
   );
+
+  const handleReplaceObject = useCallback((id: string, variantId: string | null) => {
+    setObjectEdits((prev) => {
+      const existing = prev[id];
+      const nextVariant = variantId || undefined;
+      if (!nextVariant && !existing?.deleted && !existing?.offset) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      return {
+        ...prev,
+        [id]: {
+          ...existing,
+          deleted: undefined,
+          variant: nextVariant,
+        },
+      };
+    });
+  }, []);
 
   const handleDeleteObject = useCallback((id: string) => {
     setObjectEdits((prev) => ({
@@ -435,6 +456,7 @@ export default function App() {
         onCurrentRoomChange={setCurrentRoom}
         objectEdits={objectEdits}
         onMoveObject={handleMoveObject}
+        onReplaceObject={handleReplaceObject}
         onDeleteObject={handleDeleteObject}
         onResetObject={handleResetObject}
         captureCameraRef={captureCameraRef}
@@ -487,6 +509,7 @@ export default function App() {
         wallZoneTab={wallZoneTab}
         onChangeWallZoneTab={setWallZoneTab}
         objectEdits={objectEdits}
+        onReplaceObject={handleReplaceObject}
         onResetObjects={handleResetObjects}
         shareState={shareState}
         onShareScene={handleShareScene}

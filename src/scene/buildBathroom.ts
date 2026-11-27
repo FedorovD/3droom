@@ -17,6 +17,7 @@ import {
   markEditable,
   ObjectEditsMap,
 } from './editableObjects';
+import { createObjectVariantMaterialCache } from './objectCatalog';
 import {
   applyWorldBoxUVs,
   createBathMixer,
@@ -818,6 +819,7 @@ export function buildBathroomScene(
   // Freeze static architectural scene-graph matrices once after assembly (zero per-frame matrix work!)
   scene.updateMatrixWorld(true);
   const editableIndex = indexEditableObjects(scene);
+  const variantMatCache = createObjectVariantMaterialCache(anisotropy);
   scene.traverse((obj) => {
     if (!(obj as THREE.Sprite).isSprite) {
       obj.matrixAutoUpdate = false;
@@ -825,7 +827,7 @@ export function buildBathroomScene(
   });
 
   const setObjectEdits = (edits: ObjectEditsMap) => {
-    applyObjectEdits(editableIndex, edits);
+    applyObjectEdits(editableIndex, edits, variantMatCache);
   };
 
   const getEditableObjects = (id: string): THREE.Object3D[] => {
@@ -833,6 +835,7 @@ export function buildBathroomScene(
   };
 
   const dispose = () => {
+    variantMatCache.dispose();
     apartmentShell.dispose();
     mats.dispose();
     scene.traverse((obj) => {

@@ -19,6 +19,7 @@ interface SerializedObjectEdit {
   id: string;
   offset?: [number, number, number];
   deleted?: boolean;
+  variant?: string;
 }
 
 export interface SharedSceneLoadResult {
@@ -106,7 +107,15 @@ export async function createSharedScene(
     if (edit.deleted) {
       entry.deleted = true;
     }
-    if (entry.offset || entry.deleted) {
+    if (
+      typeof edit.variant === 'string' &&
+      edit.variant.length >= 1 &&
+      edit.variant.length <= 48 &&
+      /^[a-zA-Z0-9_-]+$/.test(edit.variant)
+    ) {
+      entry.variant = edit.variant;
+    }
+    if (entry.offset || entry.deleted || entry.variant) {
       objectEditsList.push(entry);
     }
   }

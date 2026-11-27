@@ -43,10 +43,11 @@ service cloud.firestore {
     function isValidObjectEditEntry(entry) {
       return entry is map
         && entry.keys().hasAll(['id'])
-        && entry.keys().hasOnly(['id', 'offset', 'deleted'])
+        && entry.keys().hasOnly(['id', 'offset', 'deleted', 'variant'])
         && isShortToken(entry.id, 64)
         && (!('offset' in entry) || isOffsetVec3(entry.offset))
-        && (!('deleted' in entry) || entry.deleted is bool);
+        && (!('deleted' in entry) || entry.deleted is bool)
+        && (!('variant' in entry) || isShortToken(entry.variant, 48));
     }
 
     function isValidObjectEditsList(edits) {

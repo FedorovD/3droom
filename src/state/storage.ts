@@ -114,7 +114,15 @@ function sanitizeObjectEditEntry(rec: Record<string, unknown>): ObjectEditState 
   if (typeof rec.deleted === 'boolean' && rec.deleted) {
     clean.deleted = true;
   }
-  return clean.offset || clean.deleted ? clean : null;
+  if (
+    typeof rec.variant === 'string' &&
+    rec.variant.length >= 1 &&
+    rec.variant.length <= 48 &&
+    /^[a-zA-Z0-9_-]+$/.test(rec.variant)
+  ) {
+    clean.variant = rec.variant;
+  }
+  return clean.offset || clean.deleted || clean.variant ? clean : null;
 }
 
 export function sanitizeAppState(
