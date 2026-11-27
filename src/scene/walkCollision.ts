@@ -81,6 +81,9 @@ export const WALK_COLLIDERS: ColliderBox[] = [
   // Living Room / Kitchen dividing wall (encloses 715 mm Hallway closet + 630 mm Fridge alcove + rounded archway)
   { x0: APT.X3, x1: APT.X4, z0: APT.Z_HALL_CLOSET_N, z1: APT.Z_KIT_PORTAL_N },
   { x0: APT.X3, x1: APT.X4, z0: APT.Z_KIT_PORTAL_S, z1: APT.Z2 },
+  // Arched copper/glass partition fixed sidelights (leaves 1.05 m central doorway Z = 5.16 .. 6.22 open)
+  { x0: APT.X3 + 0.03, x1: APT.X4 - 0.03, z0: APT.Z_KIT_PORTAL_N, z1: APT.Z_KIT_PORTAL_N + 0.5 },
+  { x0: APT.X3 + 0.03, x1: APT.X4 - 0.03, z0: APT.Z_KIT_PORTAL_S - 0.5, z1: APT.Z_KIT_PORTAL_S },
 
   // Horizontal 1000 mm divider wall (12 cm) between Washing Machine niche & Kitchen fridge alcove
   { x0: APT.X4, x1: APT.X5, z0: APT.Z_HALL_S, z1: APT.Z_HALL_S + APT.NICHE_DIVIDER_T },
@@ -96,6 +99,15 @@ export const WALK_COLLIDERS: ColliderBox[] = [
   bathLocalBox(0, ROOM.TUB_W, 0, ROOM.D),
   // Protruding continuous Terrazzo wall (local X = COL_X0 .. W, Z = 0 .. COL_Z)
   bathLocalBox(ROOM.COL_X0, ROOM.W, 0, ROOM.COL_Z),
+  // MaybahGlass 48x190 walk-in shower screen mounted at Terrazzo corner (X = COL_X0, Z = COL_Z .. COL_Z + 0.48)
+  bathLocalBox(ROOM.COL_X0 - 0.01, ROOM.COL_X0 + 0.025, ROOM.COL_Z, ROOM.COL_Z + 0.48),
+  // Lauter Lea 80 wall-hung vanity (80 x 45.5 cm on Terrazzo wall, centered optically on COL_X0 .. LEDGE_X)
+  bathLocalBox(
+    (ROOM.COL_X0 + ROOM.LEDGE_X) * 0.5 + 0.035 - 0.4,
+    (ROOM.COL_X0 + ROOM.LEDGE_X) * 0.5 + 0.035 + 0.4,
+    ROOM.COL_Z,
+    ROOM.COL_Z + 0.455
+  ),
   // Toilet installation ledge & cabinet
   bathLocalBox(ROOM.LEDGE_X, ROOM.W, ROOM.COL_Z, ROOM.D),
 ];

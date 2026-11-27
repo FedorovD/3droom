@@ -13,7 +13,7 @@ export type CameraPresetId =
   | 'balcony';
 
 export type ViewMode = 'cutaway' | 'interior';
-export type LightingMode = 'daylight' | 'warmSpa';
+export type LightingMode = 'daylight' | 'warm3000' | 'cozy2700';
 export type FloorFinishId = 'okovango' | 'saguaro' | 'screed';
 export type DimensionMode = 'off' | 'basic' | 'detailed';
 
@@ -123,18 +123,18 @@ export const ROOM = {
   NICHE_DEPTH: 0.14,
 
   SHOWER_X0: 0.68,
-  SHOWER_X1: 1.49, // 0.81 m walk-in shower zone (68 + 81 + 105 sink wall + 22 ledge = 276 cm)
+  SHOWER_X1: 1.54, // 0.86 m walk-in shower zone (68 + 86 + 105 sink wall + 17 ledge = 276 cm)
   DRAIN_X0: 0.74,
-  DRAIN_X1: 1.43,
+  DRAIN_X1: 1.48,
   DRAIN_Z: 0.09,
   DRAIN_W: 0.065,
 
-  COL_X0: 1.49, // Exposed Terrazzo sink wall to toilet installation (LEDGE_X 2.54 - 1.49 = exact 1.05 m = 105 cm!)
-  COL_X1: 2.01,
-  COL_Z: 0.275, // 1.64 - 0.275 = 1.365 m clear width (red 1365 mm)
+  COL_X0: 1.54, // Exposed Terrazzo sink wall to toilet installation (LEDGE_X 2.59 - 1.54 = exact 1.05 m = 105 cm!)
+  COL_X1: 2.06,
+  COL_Z: 0.24, // 1.64 - 0.24 = exact 1.40 m (140 cm) toilet installation & cabinet width
 
-  LEDGE_DEPTH: 0.22,
-  LEDGE_X: 2.76 - 0.22, // 2.54
+  LEDGE_DEPTH: 0.17, // 17 cm toilet installation ledge & upper cabinet depth
+  LEDGE_X: 2.76 - 0.17, // 2.59
   LEDGE_H: 1.18,
   TOILET_Z: 1.28, // Shifted right toward doorway wall (36 cm from corner Z = 1.64)
 

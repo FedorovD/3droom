@@ -1080,3 +1080,521 @@ export function createInstallationCabinet(mats: MaterialLibrary): THREE.Group {
   return g;
 }
 
+/**
+ * 10. Wall-Hung Vanity Unit: Lauter Lea 80 (серо-зеленый п/мат)
+ *     Exact catalog dimensions: Width = 80 cm, Depth = 45.5 cm, Height = 50.5 cm.
+ *     Mounted flush on the exposed 105 cm Terrazzo ("камушек") wall (local Z = ROOM.COL_Z,
+ *     X = 1.49 .. 2.54 m) at standard ergonomic washbasin rim height Y = 0.90 m:
+ *       - Bottom of black steel frame: Y = 0.395 m
+ *       - Top of cast-marble washbasin deck: Y = 0.900 m (total height = 0.505 m)
+ *       - Matte black 16x16 mm square steel frame with integrated left-side towel rail loop
+ *       - Handleless grey-green semi-matte upper drawer + open lower storage shelf
+ *       - Seamless lofted white washbasin with subtle rear anti-splash ridge, rounded inset bowl,
+ *         slotted chrome overflow, pop-up drain, and polished chrome single-lever faucet.
+ */
+export function createLauterLeaVanity(mats: MaterialLibrary): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'LauterLea80Vanity';
+
+  const W = 0.8; // 80 cm nominal & washbasin width
+  const D = 0.455; // 45.5 cm washbasin depth
+  const H = 0.505; // 50.5 cm total vanity height (frame bottom -> basin rim top)
+
+  const yTop = 0.9; // Washbasin deck top at 90 cm above finished floor
+  const yBot = yTop - H; // 0.395 m bottom of black steel frame
+  const slabH = 0.02; // 2.0 cm crisp white countertop basin rim
+  const yFrameTop = yTop - slabH; // 0.880 m top of black metal frame
+
+  // Optically centered on the 105 cm terrazzo wall (COL_X0 .. LEDGE_X) accounting for the 6.6 cm left towel bar:
+  //   Left edge of towel bar: ~10.2 cm inside shower edge (COL_X0)
+  //   Right edge of basin:    ~9.0 cm clear of toilet installation ledge (LEDGE_X)
+  const mountX = (ROOM.COL_X0 + ROOM.LEDGE_X) * 0.5 + 0.035;
+  const mountZ = ROOM.COL_Z;
+
+  const addPart = (
+    sx: number,
+    sy: number,
+    sz: number,
+    cx: number,
+    cy: number,
+    cz: number,
+    mat: THREE.Material
+  ) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+    mesh.position.set(cx, cy, cz);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    g.add(mesh);
+    return mesh;
+  };
+
+  // -------------------------------------------------------------------------
+  // 1. MATTE BLACK STEEL SQUARE-TUBE FRAME (16 x 16 mm) + LEFT SIDE TOWEL BAR
+  // -------------------------------------------------------------------------
+  const tube = 0.016;
+  const frameW = W - 0.016; // 0.784 m -> crisp 8 mm basin overhang on left & right
+  const frameD = D - 0.015; // 0.440 m -> crisp 15 mm basin overhang at front
+  const frameH = yFrameTop - yBot; // 0.485 m
+  const frameMidY = (yBot + yFrameTop) * 0.5;
+  const halfFrameW = frameW * 0.5; // 0.392 m
+
+  for (const side of [-1, 1] as const) {
+    const sx = side * (halfFrameW - tube * 0.5);
+    // Front vertical leg
+    addPart(tube, frameH, tube, sx, frameMidY, frameD - tube * 0.5, mats.vanityBlackFrame);
+    // Rear vertical leg (flush against terrazzo wall)
+    addPart(tube, frameH, tube, sx, frameMidY, tube * 0.5, mats.vanityBlackFrame);
+    // Bottom horizontal side bar
+    addPart(tube, tube, frameD - tube * 2, sx, yBot + tube * 0.5, frameD * 0.5, mats.vanityBlackFrame);
+    // Top horizontal side bar
+    addPart(tube, tube, frameD - tube * 2, sx, yFrameTop - tube * 0.5, frameD * 0.5, mats.vanityBlackFrame);
+  }
+
+  // Rear top & bottom wall-mounting crossbars connecting left & right frames
+  const innerSpan = frameW - tube * 2; // 0.752 m
+  addPart(innerSpan, tube, tube, 0, yFrameTop - tube * 0.5, tube * 0.5, mats.vanityBlackFrame);
+  addPart(innerSpan, tube, tube, 0, yBot + tube * 0.5, tube * 0.5, mats.vanityBlackFrame);
+
+  // Integrated left-side (-X, shower side) matte black towel rail loop matching Lauter Lea 80 catalog
+  const railProj = 0.066; // 6.6 cm outward lateral projection
+  const railY = yFrameTop - tube * 0.5;
+  // Front & rear horizontal stub arms
+  addPart(
+    railProj,
+    tube,
+    tube,
+    -halfFrameW - railProj * 0.5,
+    railY,
+    frameD - tube * 0.5,
+    mats.vanityBlackFrame
+  );
+  addPart(
+    railProj,
+    tube,
+    tube,
+    -halfFrameW - railProj * 0.5,
+    railY,
+    tube * 0.5,
+    mats.vanityBlackFrame
+  );
+  // Longitudinal outer towel rail bar
+  addPart(
+    tube,
+    tube,
+    frameD,
+    -halfFrameW - railProj + tube * 0.5,
+    railY,
+    frameD * 0.5,
+    mats.vanityBlackFrame
+  );
+
+  // -------------------------------------------------------------------------
+  // 2. GREY-GREEN SEMI-MATTE UPPER DRAWER & LOWER OPEN SHELF (серо-зеленый п/мат)
+  // -------------------------------------------------------------------------
+  const drawerW = innerSpan - 0.004; // 0.748 m with 2 mm crisp side reveal inside steel frame
+  const drawerTopY = yFrameTop - 0.007; // 7 mm recessed shadow-gap finger pull under basin rim
+  const drawerH = 0.285; // 28.5 cm tall sleek handleless drawer
+  const drawerBotY = drawerTopY - drawerH; // 0.588 m
+  const drawerMidY = (drawerBotY + drawerTopY) * 0.5;
+  const frontT = 0.018;
+
+  // Flush handleless front drawer panel
+  addPart(drawerW, drawerH, frontT, 0, drawerMidY, frameD - frontT * 0.5, mats.vanitySageMatte);
+
+  // Hollow perimeter upper cabinet carcass (left/right/rear/bottom panels so sunken washbasin bowl stays 100% open!)
+  const panelT = 0.018;
+  const bodyD = frameD - frontT - 0.002;
+  const sideMidZ = 0.002 + bodyD * 0.5;
+  // Left & right grey-green side panels behind steel frame
+  addPart(panelT, drawerH, bodyD, -drawerW * 0.5 + panelT * 0.5, drawerMidY, sideMidZ, mats.vanitySageMatte);
+  addPart(panelT, drawerH, bodyD, drawerW * 0.5 - panelT * 0.5, drawerMidY, sideMidZ, mats.vanitySageMatte);
+  // Bottom panel of upper drawer box
+  addPart(drawerW - panelT * 2, panelT, bodyD, 0, drawerBotY + panelT * 0.5, sideMidZ, mats.vanitySageMatte);
+  // Back panel flush to wall (behind bowl)
+  addPart(drawerW - panelT * 2, drawerH - panelT, panelT, 0, drawerMidY + panelT * 0.5, 0.002 + panelT * 0.5, mats.vanitySageMatte);
+
+  // Recessed dark shadow-gap reveal strip along front edge above drawer (clear of bowl opening Z = 0.115..0.400)
+  addPart(
+    drawerW - 0.004,
+    0.007,
+    0.022,
+    0,
+    yFrameTop - 0.0035,
+    frameD - frontT - 0.01,
+    mats.vanityBlackFrame
+  );
+
+  // Lower open storage shelf resting directly on top of bottom horizontal black frame rails
+  const shelfT = 0.018;
+  const shelfBotY = yBot + tube; // 0.411 m
+  const shelfW = innerSpan - 0.002; // 0.750 m
+  const shelfD = frameD - 0.006; // 0.434 m (tucked slightly inside front steel posts)
+  addPart(
+    shelfW,
+    shelfT,
+    shelfD,
+    0,
+    shelfBotY + shelfT * 0.5,
+    0.002 + shelfD * 0.5,
+    mats.vanitySageMatte
+  );
+
+  // -------------------------------------------------------------------------
+  // 3. SEAMLESS LOFTED CAST-MARBLE WASHBASIN (80 x 45.5 cm, Y = 0.880 .. 0.900 m)
+  // -------------------------------------------------------------------------
+  const halfW = W * 0.5; // 0.400 m
+  const bowlX0 = -0.26;
+  const bowlX1 = 0.26; // 52 cm wide rectangular bowl
+  const bowlZ0 = 0.115; // 11.5 cm rear faucet deck
+  const bowlZ1 = D - 0.055; // 0.400 m -> 28.5 cm deep bowl, 5.5 cm front rim
+  const bowlFloorY = yTop - 0.115; // 0.785 m (11.5 cm deep interior)
+  const lipR = 0.01;
+  const coveR = 0.028;
+
+  const rings: Array<Array<[number, number, number]>> = [];
+
+  // A) Outer countertop rim underside, crisp micro-chamfered vertical lip & flat top perimeter
+  rings.push(sampleRoundedRectRing(-halfW + 0.016, halfW - 0.016, 0.002, D - 0.012, 0.002, 0.002, yFrameTop));
+  rings.push(sampleRoundedRectRing(-halfW, halfW, 0.0, D, 0.003, 0.003, yFrameTop));
+  rings.push(sampleRoundedRectRing(-halfW, halfW, 0.0, D, 0.003, 0.003, yFrameTop + 0.002));
+  rings.push(sampleRoundedRectRing(-halfW, halfW, 0.0, D, 0.003, 0.003, yTop - 0.002));
+  rings.push(sampleRoundedRectRing(-halfW + 0.002, halfW - 0.002, 0.002, D - 0.002, 0.003, 0.003, yTop));
+
+  // B) Smooth rolled inner lip curving from flat countertop deck into the washbasin bowl
+  for (let s = 0; s <= 3; s++) {
+    const a = (s / 3) * (Math.PI * 0.5);
+    const off = lipR * Math.sin(a);
+    const dy = lipR * (1 - Math.cos(a));
+    rings.push(
+      sampleRoundedRectRing(
+        bowlX0 + off,
+        bowlX1 - off,
+        bowlZ0 + off,
+        bowlZ1 - off,
+        0.036,
+        0.036,
+        yTop - dy
+      )
+    );
+  }
+
+  // C) Gently tapered inner bowl walls
+  const wallTopY = yTop - lipR;
+  const wallBotY = bowlFloorY + coveR;
+  const wtX0 = bowlX0 + lipR;
+  const wtX1 = bowlX1 - lipR;
+  const wtZ0 = bowlZ0 + lipR;
+  const wtZ1 = bowlZ1 - lipR;
+  const wbX0 = wtX0 + 0.018;
+  const wbX1 = wtX1 - 0.018;
+  const wbZ0 = wtZ0 + 0.016;
+  const wbZ1 = wtZ1 - 0.022;
+
+  for (let s = 1; s <= 3; s++) {
+    const t = s / 3;
+    rings.push(
+      sampleRoundedRectRing(
+        wtX0 + (wbX0 - wtX0) * t,
+        wtX1 + (wbX1 - wtX1) * t,
+        wtZ0 + (wbZ0 - wtZ0) * t,
+        wtZ1 + (wbZ1 - wtZ1) * t,
+        0.034 - 0.006 * t,
+        0.034 - 0.006 * t,
+        wallTopY + (wallBotY - wallTopY) * t
+      )
+    );
+  }
+
+  // D) Coved transition into flat basin floor
+  for (let s = 1; s <= 3; s++) {
+    const b = (s / 3) * (Math.PI * 0.5);
+    const inset = coveR * (1 - Math.cos(b));
+    const y = wallBotY - coveR * Math.sin(b);
+    rings.push(
+      sampleRoundedRectRing(
+        wbX0 + inset,
+        wbX1 - inset,
+        wbZ0 + inset,
+        wbZ1 - inset,
+        0.024,
+        0.024,
+        y
+      )
+    );
+  }
+
+  // E) Inner flat floor transition ring
+  const fX0 = wbX0 + coveR;
+  const fX1 = wbX1 - coveR;
+  const fZ0 = wbZ0 + coveR;
+  const fZ1 = wbZ1 - coveR;
+  rings.push(
+    sampleRoundedRectRing(
+      fX0 + 0.02,
+      fX1 - 0.02,
+      fZ0 + 0.016,
+      fZ1 - 0.016,
+      0.016,
+      0.016,
+      bowlFloorY
+    )
+  );
+
+  // Assemble indexed BufferGeometry with outward/upward normals
+  const ringLen = rings[0].length;
+  const totalVerts = rings.length * ringLen + 1;
+  const positions = new Float32Array(totalVerts * 3);
+  let ptr = 0;
+  for (const ring of rings) {
+    for (const [x, y, z] of ring) {
+      positions[ptr++] = x;
+      positions[ptr++] = y;
+      positions[ptr++] = z;
+    }
+  }
+  const centerIdx = rings.length * ringLen;
+  positions[ptr++] = 0;
+  positions[ptr++] = bowlFloorY;
+  positions[ptr++] = (fZ0 + fZ1) * 0.5;
+
+  const indices: number[] = [];
+  for (let r = 0; r < rings.length - 1; r++) {
+    const rowA = r * ringLen;
+    const rowB = (r + 1) * ringLen;
+    for (let i = 0; i < ringLen; i++) {
+      const next = (i + 1) % ringLen;
+      const a = rowA + i;
+      const b = rowB + i;
+      const c = rowA + next;
+      const d = rowB + next;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+  const lastRow = (rings.length - 1) * ringLen;
+  for (let i = 0; i < ringLen; i++) {
+    const next = (i + 1) % ringLen;
+    indices.push(lastRow + i, centerIdx, lastRow + next);
+  }
+
+  const basinGeo = new THREE.BufferGeometry();
+  basinGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  basinGeo.setIndex(indices);
+  basinGeo.computeVertexNormals();
+
+  const basinMesh = new THREE.Mesh(basinGeo, mats.ceramicWhite);
+  basinMesh.castShadow = true;
+  basinMesh.receiveShadow = true;
+  g.add(basinMesh);
+
+  // Subtle integrated rear anti-splash lip along the wall edge (characteristic of Lauter Lea basin)
+  addPart(W - 0.002, 0.01, 0.014, 0, yTop + 0.004, 0.007, mats.ceramicWhite);
+
+  // Slotted horizontal chrome overflow insert on rear inner wall of bowl
+  const ovFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(0.052, 0.011, 0.004),
+    mats.chromePolished
+  );
+  ovFrame.position.set(0, yTop - 0.044, wtZ0 + 0.008);
+  const ovSlot = new THREE.Mesh(
+    new THREE.BoxGeometry(0.042, 0.005, 0.005),
+    mats.darkMetal
+  );
+  ovSlot.position.set(0, yTop - 0.044, wtZ0 + 0.009);
+  g.add(ovFrame, ovSlot);
+
+  // Pop-up click-clack basin drain centered on bowl floor
+  const drainCenterZ = (fZ0 + fZ1) * 0.5;
+  const drainOuter = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.003, 24),
+    mats.chromePolished
+  );
+  drainOuter.position.set(0, bowlFloorY + 0.0015, drainCenterZ);
+  const drainGap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.026, 0.026, 0.004, 24),
+    mats.darkMetal
+  );
+  drainGap.position.set(0, bowlFloorY + 0.002, drainCenterZ);
+  const drainCap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.024, 0.025, 0.006, 24),
+    mats.ceramicWhite
+  );
+  drainCap.position.set(0, bowlFloorY + 0.0045, drainCenterZ);
+  g.add(drainOuter, drainGap, drainCap);
+
+  // -------------------------------------------------------------------------
+  // 4. MODERN DECK-MOUNTED POLISHED CHROME SINGLE-LEVER BASIN FAUCET
+  // -------------------------------------------------------------------------
+  const faucet = new THREE.Group();
+  faucet.name = 'BasinFaucet';
+  faucet.position.set(0, yTop, 0.062);
+
+  // Base escutcheon collar
+  const fBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.023, 0.024, 0.006, 24),
+    mats.chromeBrushed
+  );
+  fBase.position.y = 0.003;
+  fBase.castShadow = true;
+
+  // Main cylindrical riser body
+  const fBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.0195, 0.146, 24),
+    mats.chromePolished
+  );
+  fBody.position.y = 0.079;
+  fBody.castShadow = true;
+
+  // Sleek rectangular chamfered spout angling slightly up & forward over the bowl
+  const fSpout = new THREE.Mesh(
+    new THREE.BoxGeometry(0.025, 0.015, 0.112),
+    mats.chromePolished
+  );
+  fSpout.position.set(0, 0.125, 0.056);
+  fSpout.rotation.x = -0.14;
+  fSpout.castShadow = true;
+
+  // Recessed aerator nozzle under spout tip
+  const fAerator = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.009, 0.009, 0.006, 16),
+    mats.darkMetal
+  );
+  fAerator.position.set(0, 0.125, 0.102);
+
+  // Cartridge cap & crisp flat rectangular single-lever handle
+  const fCap = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.019, 0.019, 0.024, 24),
+    mats.chromePolished
+  );
+  fCap.position.y = 0.165;
+  fCap.castShadow = true;
+
+  const fLever = new THREE.Mesh(
+    new THREE.BoxGeometry(0.022, 0.0065, 0.076),
+    mats.chromePolished
+  );
+  fLever.position.set(0, 0.175, 0.032);
+  fLever.rotation.x = -0.06;
+  fLever.castShadow = true;
+
+  faucet.add(fBase, fBody, fSpout, fAerator, fCap, fLever);
+  g.add(faucet);
+
+  g.position.set(mountX, 0, mountZ);
+  return g;
+}
+
+/**
+ * 10. Walk-In Shower Glass Screen — MaybahGlass 48x190 (48 cm length x 190 cm height)
+ *     Mounted flush on the outer front corner of the protruding Terrazzo wall (X = ROOM.COL_X0, Z = ROOM.COL_Z),
+ *     right of the linear shower drain, extending 48 cm forward along +Z to shield the Lauter Lea 80 vanity.
+ *     Upper stabilizer bar anchors at 45° onto the Terrazzo wall directly above the vanity.
+ */
+export function createMaybahShowerScreen(mats: MaterialLibrary): THREE.Group {
+  const g = new THREE.Group();
+  g.name = 'MaybahGlassShowerScreen48x190';
+
+  const screenLen = 0.48; // 48 cm length (extends slightly past 45.5 cm vanity for splash protection)
+  const screenH = 1.9; // 190 cm height
+  const glassT = 0.008; // 8 mm tempered glass
+  const wallProfW = 0.018;
+  const wallProfD = 0.022;
+  const floorProfW = 0.016;
+  const floorProfH = 0.015;
+  const frontTrimW = 0.01;
+  const frontTrimD = 0.007;
+  const centerX = wallProfW * 0.5; // Left edge flush with Terrazzo corner X = ROOM.COL_X0
+
+  const profMat = mats.showerProfileBronze;
+
+  // 1. Vertical wall mounting U-channel clamped onto the Terrazzo corner face (Z = 0 .. wallProfD)
+  const wallProfile = new THREE.Mesh(
+    new THREE.BoxGeometry(wallProfW, screenH, wallProfD),
+    profMat
+  );
+  wallProfile.position.set(centerX, screenH * 0.5, wallProfD * 0.5);
+  wallProfile.castShadow = true;
+  wallProfile.receiveShadow = true;
+  g.add(wallProfile);
+
+  // 2. Slim floor U-channel water-barrier profile along the tile seam
+  const floorLen = screenLen - wallProfD;
+  const floorProfile = new THREE.Mesh(
+    new THREE.BoxGeometry(floorProfW, floorProfH, floorLen),
+    profMat
+  );
+  floorProfile.position.set(centerX, floorProfH * 0.5, wallProfD + floorLen * 0.5);
+  floorProfile.castShadow = true;
+  floorProfile.receiveShadow = true;
+  g.add(floorProfile);
+
+  // 3. Slim metallic vertical end-cap trim on the exposed front edge
+  const frontTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(frontTrimW, screenH, frontTrimD),
+    profMat
+  );
+  frontTrim.position.set(centerX, screenH * 0.5, screenLen - frontTrimD * 0.5);
+  frontTrim.castShadow = true;
+  frontTrim.receiveShadow = true;
+  g.add(frontTrim);
+
+  // 4. Crystal-clear 8 mm tempered glass panel
+  const glassH = screenH - floorProfH;
+  const glassLen = screenLen - wallProfD - frontTrimD + 0.006;
+  const glassPane = new THREE.Mesh(
+    new THREE.BoxGeometry(glassT, glassH, glassLen),
+    mats.archPartitionGlass
+  );
+  glassPane.position.set(
+    centerX,
+    floorProfH + glassH * 0.5,
+    wallProfD - 0.003 + glassLen * 0.5
+  );
+  g.add(glassPane);
+
+  // 5. Upper 45° stabilizer bar (штанга-держатель) anchored onto the Terrazzo wall above the vanity
+  //    at Y = 1.885 m with round wall rosette and top glass clamp
+  const rodY = screenH - 0.015;
+  const clampZ = 0.34; // 34 cm forward along the 48 cm glass panel
+
+  const glassClamp = new THREE.Mesh(
+    new THREE.BoxGeometry(0.022, 0.026, 0.032),
+    profMat
+  );
+  glassClamp.position.set(centerX, rodY, clampZ);
+  glassClamp.castShadow = true;
+  g.add(glassClamp);
+
+  // Round wall flange rosette mounted flush on the Terrazzo wall above the vanity (local Z = 0, X = +0.34)
+  const wallAnchorX = 0.34;
+  const wallRosette = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.01, 24),
+    profMat
+  );
+  wallRosette.rotation.x = Math.PI / 2;
+  wallRosette.position.set(wallAnchorX, rodY, 0.005);
+  wallRosette.castShadow = true;
+  g.add(wallRosette);
+
+  // Straight cylindrical stabilizer bar spanning between Terrazzo wall rosette & top glass clamp
+  const startPt = new THREE.Vector3(wallAnchorX, rodY, 0.008);
+  const endPt = new THREE.Vector3(centerX + 0.006, rodY, clampZ);
+  const rodDir = new THREE.Vector3().subVectors(endPt, startPt);
+  const rodLen = rodDir.length();
+  const rodMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.008, 0.008, rodLen, 16),
+    profMat
+  );
+  rodMesh.position.copy(startPt).addScaledVector(rodDir, 0.5);
+  rodMesh.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    rodDir.clone().normalize()
+  );
+  rodMesh.castShadow = true;
+  g.add(rodMesh);
+
+  g.position.set(ROOM.COL_X0, 0, ROOM.COL_Z);
+  return g;
+}
+
+
+

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildApartmentShell } from './buildApartmentShell';
+import { DesignConfig } from './designCatalog';
 import {
   APT,
   BATH_WORLD_CENTER,
@@ -11,13 +12,21 @@ import {
   ViewMode,
 } from './dimensions';
 import {
+  applyObjectEdits,
+  indexEditableObjects,
+  markEditable,
+  ObjectEditsMap,
+} from './editableObjects';
+import {
   applyWorldBoxUVs,
   createBathMixer,
   createBathtubAssembly,
   createCeilingDownlights,
   createInstallationCabinet,
   createInstallationFlushPlate,
+  createLauterLeaVanity,
   createLinearDrain,
+  createMaybahShowerScreen,
   createTowelWarmer,
 } from './fixtures';
 import { createMaterialLibrary, MaterialLibrary } from './textures';
@@ -27,7 +36,10 @@ export interface BathroomSceneController {
   materials: MaterialLibrary;
   setLightingMode: (mode: LightingMode) => void;
   setFloorFinish: (finishId: FloorFinishId) => void;
+  setDesignConfig: (config: DesignConfig) => void;
   setDimensionMode: (mode: DimensionMode) => void;
+  setObjectEdits: (edits: ObjectEditsMap) => void;
+  getEditableObjects: (id: string) => THREE.Object3D[];
   updateCutaway: (
     viewMode: ViewMode,
     cameraPos: THREE.Vector3,
@@ -119,11 +131,11 @@ export function buildBathroomScene(
   root.add(trimLine);
 
   // Recessed stainless linear shower drain along back wall
-  const linearDrain = createLinearDrain(mats);
+  const linearDrain = markEditable(createLinearDrain(mats), 'bath_drain', 'Линейный трап', 'xz');
   root.add(linearDrain);
 
   // Built-in Bathtub Assembly (along North wall after rotation)
-  const bathtub = createBathtubAssembly(mats);
+  const bathtub = markEditable(createBathtubAssembly(mats), 'bath_tub', 'Ванна', 'xz');
   root.add(bathtub);
 
   // =========================================================================
@@ -303,8 +315,21 @@ export function buildBathroomScene(
 
   backWallGroup.add(terrazzoLeftMesh, terrazzoRightMesh);
 
-  const bathMixer = createBathMixer(mats);
+  const bathMixer = markEditable(createBathMixer(mats), 'bath_mixer', 'Смеситель ванны', 'xyz');
   backWallGroup.add(bathMixer);
+
+  // Wall-hung Lauter Lea 80 vanity (80 x 45.5 x 50.5 cm, grey-green semi-matte) on Terrazzo wall at Y = 90 cm
+  const vanityUnit = markEditable(createLauterLeaVanity(mats), 'bath_vanity', 'Тумба Lauter Lea 80', 'xyz');
+  backWallGroup.add(vanityUnit);
+
+  // Walk-in shower glass screen MaybahGlass 48x190 mounted on Terrazzo corner right of linear shower drain
+  const showerScreen = markEditable(
+    createMaybahShowerScreen(mats),
+    'bath_shower_screen',
+    'Душевая стенка MaybahGlass 48×190',
+    'xyz'
+  );
+  backWallGroup.add(showerScreen);
 
   // =========================================================================
   // BATHROOM WALL 2: LEFT WALL (local X = 0 -> World North exterior wall, Green Subway Tiles!)
@@ -396,10 +421,20 @@ export function buildBathroomScene(
   rightWallGroup.add(rightUpperPlaster);
 
   // Custom burgundy open-shelf + 3x2 vertical walnut cabinet above toilet installation
-  const installationCabinet = createInstallationCabinet(mats);
+  const installationCabinet = markEditable(
+    createInstallationCabinet(mats),
+    'bath_cabinet',
+    'Шкаф над инсталляцией',
+    'xyz'
+  );
   rightWallGroup.add(installationCabinet);
 
-  const flushPlate = createInstallationFlushPlate(mats);
+  const flushPlate = markEditable(
+    createInstallationFlushPlate(mats),
+    'bath_flush_plate',
+    'Кнопка инсталляции',
+    'xyz'
+  );
   rightWallGroup.add(flushPlate);
 
   // =========================================================================
@@ -508,7 +543,12 @@ export function buildBathroomScene(
   frontWallGroup.add(jambL, jambR, jambTop);
 
   // Heated Towel Rail mounted on right-hand side immediately as you enter the bathroom!
-  const towelWarmer = createTowelWarmer(mats);
+  const towelWarmer = markEditable(
+    createTowelWarmer(mats),
+    'bath_towel_warmer',
+    'Полотенцесушитель',
+    'xyz'
+  );
   frontWallGroup.add(towelWarmer);
 
   // =========================================================================
@@ -530,52 +570,68 @@ export function buildBathroomScene(
   root.add(ceilingGroup);
 
   // =========================================================================
-  // LIGHTING RIG: BALANCED ARCHITECTURAL DAYLIGHT & EVENING RIG (ZERO BLOWN-OUT WALLS)
+  // LIGHTING RIG: PHYSICALLY CALIBRATED DAYLIGHT / 3000K EVENING / 2700K COZY RIG
   // =========================================================================
-  const hemiLight = new THREE.HemisphereLight(0xdbe6f2, 0x64625e, 0.48);
+  const hemiLight = new THREE.HemisphereLight(0xd9e7f5, 0x726a62, 0.62);
   hemiLight.position.set(5.3, 8.0, 3.8);
   scene.add(hemiLight);
 
-  // Warm Directional Key Light covering the entire apartment (1024px cached shadow map)
-  const keyLight = new THREE.DirectionalLight(0xfff3e0, 1.18);
-  keyLight.position.set(1.5, 11.5, 11.5);
-  keyLight.target.position.set(5.3, 0.5, 3.8);
+  // Directional Sun / Twilight Key Light covering the entire apartment (1024px cached shadow map)
+  const keyLight = new THREE.DirectionalLight(0xfff4e2, 1.55);
+  keyLight.position.set(2.4, 9.2, 12.6);
+  keyLight.target.position.set(5.1, 0.4, 4.3);
   keyLight.castShadow = !isSoftwareGl;
   keyLight.shadow.mapSize.set(1024, 1024);
   keyLight.shadow.camera.near = 1.0;
-  keyLight.shadow.camera.far = 26;
-  keyLight.shadow.camera.left = -7.5;
-  keyLight.shadow.camera.right = 7.5;
-  keyLight.shadow.camera.top = 6.5;
-  keyLight.shadow.camera.bottom = -6.5;
+  keyLight.shadow.camera.far = 28;
+  keyLight.shadow.camera.left = -7.8;
+  keyLight.shadow.camera.right = 7.8;
+  keyLight.shadow.camera.top = 6.8;
+  keyLight.shadow.camera.bottom = -6.8;
   keyLight.shadow.bias = -0.0005;
   keyLight.shadow.normalBias = 0.03;
   scene.add(keyLight, keyLight.target);
 
-  // 5 room-scoped PointLights with physical inverse-square decay (2.0) so lights don't stack across walls
-  const bathroomLight = new THREE.PointLight(0xfff7ec, 2.4, 5.2, 2.0);
+  // Primary room overhead / window-bounce PointLights (physical decay = 2.0)
+  const bathroomLight = new THREE.PointLight(0xfff8ee, 2.3, 5.2, 2.0);
   bathroomLight.position.set(1.22, ROOM.H - 0.28, 0.88);
   root.add(bathroomLight);
 
-  const livingHallLight = new THREE.PointLight(0xf6f7f9, 2.5, 8.0, 2.0);
-  livingHallLight.position.set(5.65, APT.H - 0.26, 3.75);
+  const livingHallLight = new THREE.PointLight(0xeef3f8, 1.45, 7.8, 2.0);
+  livingHallLight.position.set(5.18, APT.H - 0.28, 4.35);
   scene.add(livingHallLight);
 
-  const bedroomLight = new THREE.PointLight(0xf2f5f9, 2.2, 6.8, 2.0);
-  bedroomLight.position.set(1.68, APT.H - 0.26, 3.85);
+  const bedroomLight = new THREE.PointLight(0xeaf1f8, 1.35, 6.4, 2.0);
+  bedroomLight.position.set(1.72, APT.H - 0.28, 3.6);
   scene.add(bedroomLight);
 
-  const kitchenLight = new THREE.PointLight(0xfff8ee, 2.0, 6.0, 2.0);
-  kitchenLight.position.set(8.85, APT.H - 0.26, 5.75);
+  const kitchenLight = new THREE.PointLight(0xf5f4ef, 1.25, 5.8, 2.0);
+  kitchenLight.position.set(8.88, APT.H - 0.28, 5.55);
   scene.add(kitchenLight);
 
-  const entryLight = new THREE.PointLight(0xf6f7f9, 1.6, 4.8, 2.0);
+  const entryLight = new THREE.PointLight(0xf4efe6, 1.55, 4.9, 2.0);
   entryLight.position.set(
     (APT.X_HALL_W + APT.X_VEST_E) * 0.5,
     APT.H - 0.26,
     (APT.Z0 + APT.Z_ARCH_N) * 0.5
   );
   scene.add(entryLight);
+
+  // Local architectural evening accent pools (OFF in Daylight, glowing warmly in 3000K & 2700K)
+  // 1) Living Room floor lamp + curtain cove warm wash
+  const livingAccentLight = new THREE.PointLight(0xffc988, 0, 5.4, 2.0);
+  livingAccentLight.position.set(6.05, 1.92, 3.45);
+  scene.add(livingAccentLight);
+
+  // 2) Kitchen dining pendant warm downward pool directly over the Ø86 round table (8.26, 6.18)
+  const diningPendantLight = new THREE.PointLight(0xffc886, 0, 4.3, 2.0);
+  diningPendantLight.position.set(8.26, 1.84, 6.18);
+  scene.add(diningPendantLight);
+
+  // 3) Bedroom bedside sconces & lamps warm glow washing headboard wall & paint
+  const bedroomAccentLight = new THREE.PointLight(0xffc580, 0, 4.6, 2.0);
+  bedroomAccentLight.position.set(1.24, 1.45, 4.86);
+  scene.add(bedroomAccentLight);
 
   // =========================================================================
   // STATE CONTROLLERS
@@ -584,45 +640,110 @@ export function buildBathroomScene(
   const setLightingMode = (mode: LightingMode) => {
     const bg = scene.background as THREE.Color;
     if (mode === 'daylight') {
-      hemiLight.color.setHex(0xdbe6f2);
-      hemiLight.groundColor.setHex(0x64625e);
-      hemiLight.intensity = 0.48;
-      keyLight.color.setHex(0xfff3e0);
-      keyLight.intensity = 1.18;
-      bathroomLight.color.setHex(0xfff7ec);
-      bathroomLight.intensity = 2.4;
-      livingHallLight.color.setHex(0xf6f7f9);
-      livingHallLight.intensity = 2.4;
-      bedroomLight.color.setHex(0xf2f5f9);
-      bedroomLight.intensity = 2.1;
-      kitchenLight.color.setHex(0xfff8ee);
-      kitchenLight.intensity = 1.9;
-      entryLight.color.setHex(0xf6f7f9);
+      // Natural 5200K Brest afternoon sun + crisp daylight sky bounce (overhead lamps off/neutral)
+      hemiLight.color.setHex(0xd9e7f5);
+      hemiLight.groundColor.setHex(0x726a62);
+      hemiLight.intensity = 0.62;
+
+      keyLight.color.setHex(0xfff4e2);
+      keyLight.intensity = 1.55;
+
+      bathroomLight.color.setHex(0xfff8ee);
+      bathroomLight.intensity = 2.3;
+      livingHallLight.color.setHex(0xeef3f8);
+      livingHallLight.intensity = 1.45;
+      bedroomLight.color.setHex(0xeaf1f8);
+      bedroomLight.intensity = 1.35;
+      kitchenLight.color.setHex(0xf5f4ef);
+      kitchenLight.intensity = 1.25;
+      entryLight.color.setHex(0xf4efe6);
       entryLight.intensity = 1.55;
-      mats.emissiveWarmLed.emissiveIntensity = 1.6;
-      mats.emissiveSpotLed.emissiveIntensity = 2.1;
+
+      livingAccentLight.intensity = 0;
+      diningPendantLight.intensity = 0;
+      bedroomAccentLight.intensity = 0;
+
+      mats.emissiveWarmLed.emissive.setHex(0xffdfad);
+      mats.emissiveWarmLed.emissiveIntensity = 0.55;
+      mats.emissiveSpotLed.emissive.setHex(0xfff7ea);
+      mats.emissiveSpotLed.emissiveIntensity = 0.75;
+      mats.lampShadeEmissive.emissive.setHex(0xffd396);
+      mats.lampShadeEmissive.emissiveIntensity = 0.06;
+
       bg.setHex(0x1b1e1d);
       (scene.fog as THREE.FogExp2).color.setHex(0x1b1e1d);
-    } else {
-      hemiLight.color.setHex(0x6d7c8c);
-      hemiLight.groundColor.setHex(0x36312c);
+    } else if (mode === 'warm3000') {
+      // Real 3000K Evening Interior (full overhead 3000K + warm sconces/pendant + cool blue-hour dusk outside)
+      hemiLight.color.setHex(0x475975);
+      hemiLight.groundColor.setHex(0x3e3228);
       hemiLight.intensity = 0.24;
-      keyLight.color.setHex(0xffd29b);
-      keyLight.intensity = 0.42;
-      bathroomLight.color.setHex(0xffd9aa);
-      bathroomLight.intensity = 2.5;
-      livingHallLight.color.setHex(0xffddb3);
-      livingHallLight.intensity = 2.3;
-      bedroomLight.color.setHex(0xffdbb0);
-      bedroomLight.intensity = 1.8;
-      kitchenLight.color.setHex(0xffdeb8);
-      kitchenLight.intensity = 1.9;
-      entryLight.color.setHex(0xffddb3);
-      entryLight.intensity = 1.5;
-      mats.emissiveWarmLed.emissiveIntensity = 3.0;
-      mats.emissiveSpotLed.emissiveIntensity = 2.8;
-      bg.setHex(0x121413);
-      (scene.fog as THREE.FogExp2).color.setHex(0x121413);
+
+      keyLight.color.setHex(0x7890b4);
+      keyLight.intensity = 0.24;
+
+      bathroomLight.color.setHex(0xffd6a3);
+      bathroomLight.intensity = 2.65;
+      livingHallLight.color.setHex(0xffd29c);
+      livingHallLight.intensity = 2.75;
+      bedroomLight.color.setHex(0xffd098);
+      bedroomLight.intensity = 2.2;
+      kitchenLight.color.setHex(0xffd39e);
+      kitchenLight.intensity = 2.15;
+      entryLight.color.setHex(0xffd29c);
+      entryLight.intensity = 1.85;
+
+      livingAccentLight.color.setHex(0xffc988);
+      livingAccentLight.intensity = 1.45;
+      diningPendantLight.color.setHex(0xffc886);
+      diningPendantLight.intensity = 1.65;
+      bedroomAccentLight.color.setHex(0xffc580);
+      bedroomAccentLight.intensity = 1.35;
+
+      mats.emissiveWarmLed.emissive.setHex(0xffcf91);
+      mats.emissiveWarmLed.emissiveIntensity = 3.1;
+      mats.emissiveSpotLed.emissive.setHex(0xffe1b5);
+      mats.emissiveSpotLed.emissiveIntensity = 3.0;
+      mats.lampShadeEmissive.emissive.setHex(0xffd194);
+      mats.lampShadeEmissive.emissiveIntensity = 1.8;
+
+      bg.setHex(0x101316);
+      (scene.fog as THREE.FogExp2).color.setHex(0x101316);
+    } else {
+      // Cozy 2700K Accent Night (overhead ceiling spots dimmed — pendant, sconces, floor lamp & LED coves shine!)
+      hemiLight.color.setHex(0x2a3548);
+      hemiLight.groundColor.setHex(0x30251c);
+      hemiLight.intensity = 0.14;
+
+      keyLight.color.setHex(0x566c90);
+      keyLight.intensity = 0.12;
+
+      bathroomLight.color.setHex(0xffc27e);
+      bathroomLight.intensity = 1.35;
+      livingHallLight.color.setHex(0xffbe78);
+      livingHallLight.intensity = 0.72;
+      bedroomLight.color.setHex(0xffbc74);
+      bedroomLight.intensity = 0.52;
+      kitchenLight.color.setHex(0xffbe78);
+      kitchenLight.intensity = 0.55;
+      entryLight.color.setHex(0xffc27e);
+      entryLight.intensity = 1.05;
+
+      livingAccentLight.color.setHex(0xffba6e);
+      livingAccentLight.intensity = 2.45;
+      diningPendantLight.color.setHex(0xffb96c);
+      diningPendantLight.intensity = 2.45;
+      bedroomAccentLight.color.setHex(0xffb668);
+      bedroomAccentLight.intensity = 2.2;
+
+      mats.emissiveWarmLed.emissive.setHex(0xffb968);
+      mats.emissiveWarmLed.emissiveIntensity = 3.6;
+      mats.emissiveSpotLed.emissive.setHex(0xffd29b);
+      mats.emissiveSpotLed.emissiveIntensity = 0.22;
+      mats.lampShadeEmissive.emissive.setHex(0xffbe72);
+      mats.lampShadeEmissive.emissiveIntensity = 2.55;
+
+      bg.setHex(0x0c0e11);
+      (scene.fog as THREE.FogExp2).color.setHex(0x0c0e11);
     }
     apartmentShell.setLightingMode(mode);
   };
@@ -696,11 +817,20 @@ export function buildBathroomScene(
 
   // Freeze static architectural scene-graph matrices once after assembly (zero per-frame matrix work!)
   scene.updateMatrixWorld(true);
+  const editableIndex = indexEditableObjects(scene);
   scene.traverse((obj) => {
     if (!(obj as THREE.Sprite).isSprite) {
       obj.matrixAutoUpdate = false;
     }
   });
+
+  const setObjectEdits = (edits: ObjectEditsMap) => {
+    applyObjectEdits(editableIndex, edits);
+  };
+
+  const getEditableObjects = (id: string): THREE.Object3D[] => {
+    return editableIndex.get(id) ?? [];
+  };
 
   const dispose = () => {
     apartmentShell.dispose();
@@ -730,7 +860,10 @@ export function buildBathroomScene(
     materials: mats,
     setLightingMode,
     setFloorFinish: apartmentShell.setFloorFinish,
+    setDesignConfig: apartmentShell.setDesignConfig,
     setDimensionMode,
+    setObjectEdits,
+    getEditableObjects,
     updateCutaway,
     updateBalconyDoor: apartmentShell.updateBalconyDoor,
     dispose,

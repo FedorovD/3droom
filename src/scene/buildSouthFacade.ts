@@ -1161,10 +1161,22 @@ export function buildSouthFacade(
 
   const applyStreetTint = () => {
     if (!streetTexLoaded) {
-      streetMat.color.setHex(activeLightingMode === 'daylight' ? 0xd6dbe0 : 0x5c5754);
+      streetMat.color.setHex(
+        activeLightingMode === 'daylight'
+          ? 0xd6dbe0
+          : activeLightingMode === 'warm3000'
+            ? 0x3b485e
+            : 0x202836
+      );
       return;
     }
-    streetMat.color.setHex(activeLightingMode === 'daylight' ? 0xf8f8f6 : 0x887d76);
+    streetMat.color.setHex(
+      activeLightingMode === 'daylight'
+        ? 0xf8f8f6
+        : activeLightingMode === 'warm3000'
+          ? 0x526178
+          : 0x2d3748
+    );
   };
 
   const loadStreetPanorama = (withCors: boolean) => {

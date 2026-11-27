@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import brestBedroomPanoramaUrl from '../assets/images/brest_west_panorama.jpg';
+import { buildArchedMetalPartition } from './archPartition';
+import { buildApartmentFurniture } from './buildApartmentFurniture';
 import { buildSouthFacade } from './buildSouthFacade';
+import { DesignConfig } from './designCatalog';
 import {
   APT,
   CameraPresetId,
@@ -14,6 +17,7 @@ import {
 import { applyWorldBoxUVs } from './fixtures';
 import { buildLaminateTextures } from './laminateTexture';
 import { MaterialLibrary } from './textures';
+import { buildWallFinishSystem } from './wallFinishSystem';
 
 export interface ApartmentShellHandle {
   group: THREE.Group;
@@ -21,6 +25,7 @@ export interface ApartmentShellHandle {
   setDimensionMode: (mode: DimensionMode) => void;
   setLightingMode: (mode: LightingMode) => void;
   setFloorFinish: (finishId: FloorFinishId) => void;
+  setDesignConfig: (config: DesignConfig) => void;
   updateCutaway: (
     viewMode: ViewMode,
     cameraPos: THREE.Vector3,
@@ -35,6 +40,8 @@ export interface ApartmentShellHandle {
   dispose: () => void;
 }
 
+type WallZone = 'main' | 'bedroom' | 'split_bedroom_west';
+
 /** White plastered wall box with subtle architectural cut-top tone when seen from above */
 function makeWhiteWall(
   x0: number,
@@ -43,7 +50,8 @@ function makeWhiteWall(
   y1: number,
   z0: number,
   z1: number,
-  mats: MaterialLibrary
+  mats: MaterialLibrary,
+  wallZone: WallZone = 'main'
 ): THREE.Mesh {
   const sx = Math.abs(x1 - x0);
   const sy = Math.abs(y1 - y0);
@@ -51,14 +59,36 @@ function makeWhiteWall(
   const geo = new THREE.BoxGeometry(sx, sy, sz);
   applyWorldBoxUVs(geo, (x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5, 2.2, 2.2);
   // Top cap uses slightly darker architectural cut tone so walls read crisply in top/cutaway plan!
-  const materials = [
-    mats.aptWhiteWall,
-    mats.aptWhiteWall,
-    mats.aptWallCutCap,
-    mats.aptWhiteWall,
-    mats.aptWhiteWall,
-    mats.aptWhiteWall,
-  ];
+  let materials: THREE.Material[];
+  if (wallZone === 'bedroom') {
+    materials = [
+      mats.bedroomWallMat,
+      mats.bedroomWallMat,
+      mats.bedroomWallCutCap,
+      mats.bedroomWallMat,
+      mats.bedroomWallMat,
+      mats.bedroomWallMat,
+    ];
+  } else if (wallZone === 'split_bedroom_west') {
+    // +X faces Living Room (main), -X faces Bedroom (bedroom)
+    materials = [
+      mats.aptWhiteWall,
+      mats.bedroomWallMat,
+      mats.aptWallCutCap,
+      mats.aptWhiteWall,
+      mats.aptWhiteWall,
+      mats.aptWhiteWall,
+    ];
+  } else {
+    materials = [
+      mats.aptWhiteWall,
+      mats.aptWhiteWall,
+      mats.aptWallCutCap,
+      mats.aptWhiteWall,
+      mats.aptWhiteWall,
+      mats.aptWhiteWall,
+    ];
+  }
   const mesh = new THREE.Mesh(geo, materials);
   mesh.position.set((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5);
   mesh.castShadow = true;
@@ -1223,6 +1253,8 @@ export function buildApartmentShell(
   // =========================================================================
   // Recessed under-window radiator niche depth (13 cm into 36 cm exterior masonry wall, so radiator front sits flush/tucked inside)
   const radNicheD = 0.13;
+  // Living Room niche starts 4 cm East of window jamb to leave a clean 10 cm corner pocket beside the 12 cm SW riser box
+  const livNicheX0 = APT.WIN_LIV_X0 + 0.04;
 
   const floorGroup = new THREE.Group();
   floorGroup.name = 'ApartmentFloors';
@@ -1233,7 +1265,7 @@ export function buildApartmentShell(
     makeScreedSlab(1.26, 2.31, APT.Z2, APT.Z2 + 0.11, mats),
     // Floor continuations inside the 3 recessed under-window radiator niches (Bedroom, Living Room, Kitchen)
     makeScreedSlab(-radNicheD, APT.X0, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats),
-    makeScreedSlab(APT.WIN_LIV_X0, APT.WIN_LIV_X1, APT.Z2, APT.Z2 + radNicheD, mats),
+    makeScreedSlab(livNicheX0, APT.WIN_LIV_X1, APT.Z2, APT.Z2 + radNicheD, mats),
     makeScreedSlab(APT.WIN_KIT_X0, APT.WIN_KIT_X1, APT.Z2, APT.Z2 + radNicheD, mats),
     // Entry Hallway upper vestibule (2610 x 1475 mm) + 900 mm archway threshold floor
     makeScreedSlab(APT.X_HALL_W, APT.X_VEST_E + 0.02, APT.Z0, APT.Z_ARCH_N + 0.02, mats),
@@ -1371,10 +1403,22 @@ export function buildApartmentShell(
 
   const applyWestTint = () => {
     if (!westStreetTex) {
-      westStreetMat.color.setHex(westLightingMode === 'daylight' ? 0xd6dbe0 : 0x5c5754);
+      westStreetMat.color.setHex(
+        westLightingMode === 'daylight'
+          ? 0xd6dbe0
+          : westLightingMode === 'warm3000'
+            ? 0x3b485e
+            : 0x202836
+      );
       return;
     }
-    westStreetMat.color.setHex(westLightingMode === 'daylight' ? 0xf8f8f6 : 0x887d76);
+    westStreetMat.color.setHex(
+      westLightingMode === 'daylight'
+        ? 0xf8f8f6
+        : westLightingMode === 'warm3000'
+          ? 0x526178
+          : 0x2d3748
+    );
   };
 
   const loadWestPanorama = (withCors: boolean) => {
@@ -1424,9 +1468,10 @@ export function buildApartmentShell(
   const northExtGroup = new THREE.Group();
   northExtGroup.name = 'NorthExteriorWall';
 
-  // Bedroom + Living Room North exterior wall (400 mm flush with archway wall, X = -ET .. X_HALL_W - VT)
+  // Bedroom North exterior wall (X = -ET .. X1) + Living Room North exterior wall (X = X1 .. X_HALL_W - VT)
   northExtGroup.add(
-    makeWhiteWall(-ET, APT.X_HALL_W - VT, 0, H, APT.Z_ARCH_N, APT.Z1, mats)
+    makeWhiteWall(-ET, APT.X1, 0, H, APT.Z_ARCH_N, APT.Z1, mats, 'bedroom'),
+    makeWhiteWall(APT.X1, APT.X_HALL_W - VT, 0, H, APT.Z_ARCH_N, APT.Z1, mats, 'main')
   );
   // Entry Vestibule West exterior wall (200 mm thick, X = X_HALL_W - VT .. X_HALL_W, Z = Z0 - VT .. Z1)
   northExtGroup.add(
@@ -1505,14 +1550,14 @@ export function buildApartmentShell(
 
   // 1) North corner pier (Z = Z1 .. WIN_BED1_Z0)
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, 0, H, APT.Z1, APT.WIN_BED1_Z0, mats)
+    makeWhiteWall(-ET, 0, 0, H, APT.Z1, APT.WIN_BED1_Z0, mats, 'bedroom')
   );
   // 2) Window 1 (North / right when facing West): below sill + header + 2-pane PVC window
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, 0, APT.WIN_SILL_Y, APT.WIN_BED1_Z0, APT.WIN_BED1_Z1, mats)
+    makeWhiteWall(-ET, 0, 0, APT.WIN_SILL_Y, APT.WIN_BED1_Z0, APT.WIN_BED1_Z1, mats, 'bedroom')
   );
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, APT.WIN_TOP_Y, H, APT.WIN_BED1_Z0, APT.WIN_BED1_Z1, mats)
+    makeWhiteWall(-ET, 0, APT.WIN_TOP_Y, H, APT.WIN_BED1_Z0, APT.WIN_BED1_Z1, mats, 'bedroom')
   );
   const bedWin1 = createWindowAssembly(
     APT.WIN_BED1_Z1 - APT.WIN_BED1_Z0,
@@ -1527,15 +1572,15 @@ export function buildApartmentShell(
 
   // 3) Solid 320 mm masonry pier between the two Bedroom windows (Z = WIN_BED1_Z1 .. WIN_BED2_Z0)
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, 0, H, APT.WIN_BED1_Z1, APT.WIN_BED2_Z0, mats)
+    makeWhiteWall(-ET, 0, 0, H, APT.WIN_BED1_Z1, APT.WIN_BED2_Z0, mats, 'bedroom')
   );
 
   // 4) Window 2 (South / left when facing West): recessed under-sill radiator niche + header + 2-pane PVC window
   westExtGroup.add(
-    makeWhiteWall(-ET, -radNicheD, 0, APT.WIN_SILL_Y, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats)
+    makeWhiteWall(-ET, -radNicheD, 0, APT.WIN_SILL_Y, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats, 'bedroom')
   );
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, APT.WIN_TOP_Y, H, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats)
+    makeWhiteWall(-ET, 0, APT.WIN_TOP_Y, H, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats, 'bedroom')
   );
   const bedWin2 = createWindowAssembly(
     APT.WIN_BED2_Z1 - APT.WIN_BED2_Z0,
@@ -1614,7 +1659,7 @@ export function buildApartmentShell(
 
   // 5) South pier down to South corner (Z = WIN_BED2_Z1 .. Z2 + ET)
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, 0, H, APT.WIN_BED2_Z1, APT.Z2 + ET, mats)
+    makeWhiteWall(-ET, 0, 0, H, APT.WIN_BED2_Z1, APT.Z2 + ET, mats, 'bedroom')
   );
 
   // 6) Bedroom Walk-in Closet (Гардеробная) Heating Riser & West-Wall PPR Pipes (per photo)
@@ -1975,12 +2020,13 @@ export function buildApartmentShell(
   const southExtGroup = new THREE.Group();
   southExtGroup.name = 'SouthExteriorWall';
 
-  // 1) Bedroom South wall with recessed Walk-in Closet radiator niche + Living Room left pier (X = 0 .. WIN_LIV_X0)
+  // 1) Bedroom South wall with recessed Walk-in Closet radiator niche (X = 0 .. X1) + Living Room left pier (X = X1 .. WIN_LIV_X0)
   southExtGroup.add(
-    makeWhiteWall(0, closetNicheX0, 0, H, APT.Z2, APT.Z2 + ET, mats),
-    makeWhiteWall(closetNicheX0, closetNicheX1, 0, closetNicheH, APT.Z2 + closetNicheD, APT.Z2 + ET, mats),
-    makeWhiteWall(closetNicheX0, closetNicheX1, closetNicheH, H, APT.Z2, APT.Z2 + ET, mats),
-    makeWhiteWall(closetNicheX1, APT.WIN_LIV_X0, 0, H, APT.Z2, APT.Z2 + ET, mats)
+    makeWhiteWall(0, closetNicheX0, 0, H, APT.Z2, APT.Z2 + ET, mats, 'bedroom'),
+    makeWhiteWall(closetNicheX0, closetNicheX1, 0, closetNicheH, APT.Z2 + closetNicheD, APT.Z2 + ET, mats, 'bedroom'),
+    makeWhiteWall(closetNicheX0, closetNicheX1, closetNicheH, H, APT.Z2, APT.Z2 + ET, mats, 'bedroom'),
+    makeWhiteWall(closetNicheX1, APT.X1, 0, H, APT.Z2, APT.Z2 + ET, mats, 'bedroom'),
+    makeWhiteWall(APT.X1, APT.WIN_LIV_X0, 0, H, APT.Z2, APT.Z2 + ET, mats, 'main')
   );
 
   // White 6-section heating radiator mounted inside the Bedroom walk-in closet recessed niche (per photo)
@@ -2053,9 +2099,20 @@ export function buildApartmentShell(
     southClosetPipes.add(elbow1, jog, elbow2, stub, unionNut);
   }
   southExtGroup.add(southClosetPipes);
-  // 2) Under Living Room Window (X = WIN_LIV_X0 .. WIN_LIV_X1, 1120 mm wide) — recessed radiator niche
+  // 2) Living Room South-West vertical heating riser box (короб стояка, 12 x 14 cm, floor-to-ceiling)
+  //    + small recessed corner pocket between the riser box & the under-window radiator niche
+  const livRiserBoxW = 0.12;
+  const livRiserBoxD = 0.14;
+  const livRiserBoxX1 = APT.X2 + livRiserBoxW; // 3.54 m
   southExtGroup.add(
-    makeWhiteWall(APT.WIN_LIV_X0, APT.WIN_LIV_X1, 0, APT.WIN_SILL_Y, APT.Z2 + radNicheD, APT.Z2 + ET, mats)
+    makeWhiteWall(APT.X2, livRiserBoxX1, 0, H, APT.Z2 - livRiserBoxD, APT.Z2, mats)
+  );
+  // 2a) Under Living Room Window: 4 cm left niche cheek + recessed radiator niche (livNicheX0 .. WIN_LIV_X1)
+  southExtGroup.add(
+    makeWhiteWall(APT.WIN_LIV_X0, livNicheX0, 0, APT.WIN_SILL_Y, APT.Z2, APT.Z2 + ET, mats)
+  );
+  southExtGroup.add(
+    makeWhiteWall(livNicheX0, APT.WIN_LIV_X1, 0, APT.WIN_SILL_Y, APT.Z2 + radNicheD, APT.Z2 + ET, mats)
   );
   // 2b) Solid 300 mm masonry pier between Living Room Window (1120) & Balcony Door block (1100)
   southExtGroup.add(
@@ -2080,11 +2137,96 @@ export function buildApartmentShell(
   );
   southExtGroup.add(livWin);
 
-  // White sectional heating radiator recessed inside the Living Room under-window niche (facing -Z into Living Room)
-  const livRadiator = createWhiteRadiator(10, mats);
+  // White sectional heating radiator recessed inside the Living Room under-window niche (side-piped from SW riser box)
+  const livRadCenterX = 4.22;
+  const livRadY = 0.42;
+  const livRadiator = createWhiteRadiator(10, mats, 'posX');
   livRadiator.rotation.y = Math.PI;
-  livRadiator.position.set((APT.WIN_LIV_X0 + APT.WIN_LIV_X1) * 0.5, 0.42, APT.Z2 + radNicheD);
+  livRadiator.position.set(livRadCenterX, livRadY, APT.Z2 + radNicheD);
   southExtGroup.add(livRadiator);
+
+  // Twin curved white heating pipes exiting the East face of the SW riser box around the corner step
+  // into the Living Room radiator with nickel ball valves & red butterfly shut-off handles (per site photo)
+  const livRadPipes = new THREE.Group();
+  livRadPipes.name = 'LivingRadiatorPipes';
+  const livPipeR = 0.0135;
+  const livPipeExitZ = APT.Z2 - 0.042;
+  const livRadPortZ = APT.Z2 + radNicheD - (0.032 + 0.072 * 0.52); // 7.11056 m (exact manifold center Z)
+  const livRadWestPortX = livRadCenterX - (10 * 0.08) * 0.5 - 0.008; // 3.812 m (West manifold port X)
+  const livValveLen = 0.056;
+  const livUnionLen = 0.024;
+  const livValveStartX = livRadWestPortX - livValveLen - livUnionLen; // 3.732 m
+
+  const redValveHandleMat = new THREE.MeshStandardMaterial({
+    color: 0xb52d27,
+    roughness: 0.42,
+    metalness: 0.25,
+  });
+  const brassThreadMat = new THREE.MeshStandardMaterial({
+    color: 0xb99d5e,
+    roughness: 0.36,
+    metalness: 0.72,
+  });
+  kitchenDetailMats.push(redValveHandleMat, brassThreadMat);
+
+  const livExitCollarGeo = new THREE.CylinderGeometry(livPipeR * 1.48, livPipeR * 1.48, 0.012, 14);
+  livExitCollarGeo.rotateZ(Math.PI / 2);
+  const livValveBodyGeo = new THREE.CylinderGeometry(0.0165, 0.0165, livValveLen, 14);
+  livValveBodyGeo.rotateZ(Math.PI / 2);
+  const livValveHexGeo = new THREE.CylinderGeometry(0.0195, 0.0195, 0.014, 6);
+  livValveHexGeo.rotateZ(Math.PI / 2);
+  const livUnionGeo = new THREE.CylinderGeometry(0.0155, 0.0155, livUnionLen, 12);
+  livUnionGeo.rotateZ(Math.PI / 2);
+  const livValveStemGeo = new THREE.CylinderGeometry(0.0055, 0.0055, 0.022, 10);
+  livValveStemGeo.rotateX(Math.PI / 2);
+  const livWingGeo = new THREE.BoxGeometry(0.044, 0.014, 0.008);
+
+  for (const py of [livRadY + 0.225, livRadY - 0.225]) {
+    // Wall exit collar on East face of riser box
+    const collar = new THREE.Mesh(livExitCollarGeo, mats.windowFrameWhite);
+    collar.position.set(livRiserBoxX1 + 0.005, py, livPipeExitZ);
+    livRadPipes.add(collar);
+
+    // Smooth S-curved white painted pipe from riser box East face around the pier step into the radiator niche
+    const pipeCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(livRiserBoxX1 - 0.012, py, livPipeExitZ),
+      new THREE.Vector3(livRiserBoxX1 + 0.045, py, livPipeExitZ),
+      new THREE.Vector3(livNicheX0 + 0.012, py, APT.Z2 - 0.016),
+      new THREE.Vector3(livNicheX0 + 0.056, py, livRadPortZ - 0.004),
+      new THREE.Vector3(livValveStartX + 0.004, py, livRadPortZ),
+    ]);
+    const pipeMesh = new THREE.Mesh(
+      new THREE.TubeGeometry(pipeCurve, 28, livPipeR, 12, false),
+      mats.windowFrameWhite
+    );
+    pipeMesh.castShadow = true;
+    pipeMesh.receiveShadow = true;
+    livRadPipes.add(pipeMesh);
+
+    // Nickel shut-off ball valve body + hex ends + brass/chrome union into radiator manifold
+    const valveCenterX = livValveStartX + livValveLen * 0.5;
+    const valveBody = new THREE.Mesh(livValveBodyGeo, mats.chromeBrushed);
+    valveBody.position.set(valveCenterX, py, livRadPortZ);
+    valveBody.castShadow = true;
+
+    const hexL = new THREE.Mesh(livValveHexGeo, mats.chromeBrushed);
+    hexL.position.set(livValveStartX + 0.008, py, livRadPortZ);
+    const hexR = new THREE.Mesh(livValveHexGeo, mats.chromeBrushed);
+    hexR.position.set(livValveStartX + livValveLen - 0.008, py, livRadPortZ);
+
+    const union = new THREE.Mesh(livUnionGeo, brassThreadMat);
+    union.position.set(livRadWestPortX - livUnionLen * 0.5, py, livRadPortZ);
+
+    // Red butterfly shut-off handle facing into the Living Room (-Z)
+    const stem = new THREE.Mesh(livValveStemGeo, mats.chromeBrushed);
+    stem.position.set(valveCenterX, py, livRadPortZ - 0.02);
+    const wing = new THREE.Mesh(livWingGeo, redValveHandleMat);
+    wing.position.set(valveCenterX, py, livRadPortZ - 0.031);
+    wing.rotation.z = 0.22;
+
+    livRadPipes.add(valveBody, hexL, hexR, union, stem, wing);
+  }
+  southExtGroup.add(livRadPipes);
 
   // Living Room Full-Height Balcony Door (with operable hinged leaf for Walk Mode)
   const balcDoorCenterX = (APT.BALC_DOOR_X0 + APT.BALC_DOOR_X1) * 0.5;
@@ -2103,6 +2245,10 @@ export function buildApartmentShell(
   // 4) Pier between Balcony Door & Kitchen Window (X = BALC_DOOR_X1 .. WIN_KIT_X0)
   southExtGroup.add(
     makeWhiteWall(APT.BALC_DOOR_X1, APT.WIN_KIT_X0, 0, H, APT.Z2, APT.Z2 + ET, mats)
+  );
+  // 4a) Living Room South-East matching vertical riser box (со стороны двери на балкон, угол арки: 12 x 14 cm, floor-to-ceiling)
+  southExtGroup.add(
+    makeWhiteWall(APT.X3 - livRiserBoxW, APT.X3, 0, H, APT.Z2 - livRiserBoxD, APT.Z2, mats)
   );
   // 5) Under Kitchen Window — recessed radiator niche
   southExtGroup.add(
@@ -2127,11 +2273,76 @@ export function buildApartmentShell(
   );
   southExtGroup.add(kitWin);
 
-  // White sectional heating radiator recessed inside the Kitchen under-window niche (facing -Z into Kitchen)
-  const kitRadiator = createWhiteRadiator(10, mats);
+  // White sectional heating radiator recessed inside the Kitchen under-window niche (side-piped from SW archway riser box)
+  const kitRadCenterX = 8.66;
+  const kitRadY = 0.42;
+  const kitRadiator = createWhiteRadiator(10, mats, 'posX');
   kitRadiator.rotation.y = Math.PI;
-  kitRadiator.position.set((APT.WIN_KIT_X0 + APT.WIN_KIT_X1) * 0.5, 0.42, APT.Z2 + radNicheD);
+  kitRadiator.position.set(kitRadCenterX, kitRadY, APT.Z2 + radNicheD);
   southExtGroup.add(kitRadiator);
+
+  // Twin curved white heating pipes exiting directly from the Kitchen archway partition wall (APT.X4)
+  // along the 65 cm left pier into the recessed Kitchen radiator with shut-off ball valves & red butterfly handles
+  const kitRadPipes = new THREE.Group();
+  kitRadPipes.name = 'KitchenRadiatorPipes';
+  const kitRadWestPortX = kitRadCenterX - (10 * 0.08) * 0.5 - 0.008; // 8.252 m
+  const kitValveStartX = kitRadWestPortX - livValveLen - livUnionLen; // 8.172 m
+  const kitClipGeo = new THREE.BoxGeometry(0.016, 0.016, APT.Z2 - livPipeExitZ);
+
+  for (const py of [kitRadY + 0.225, kitRadY - 0.225]) {
+    // Wall exit collar directly on the East face of the archway partition wall (X = APT.X4)
+    const collar = new THREE.Mesh(livExitCollarGeo, mats.windowFrameWhite);
+    collar.position.set(APT.X4 + 0.005, py, livPipeExitZ);
+    kitRadPipes.add(collar);
+
+    // Wall clips along the 65 cm pier between the archway corner and Kitchen window niche
+    for (const cx of [7.54, 7.8]) {
+      const clip = new THREE.Mesh(kitClipGeo, mats.windowFrameWhite);
+      clip.position.set(cx, py, (livPipeExitZ + APT.Z2) * 0.5);
+      kitRadPipes.add(clip);
+    }
+
+    // Smooth S-curved white painted pipe exiting the archway wall & sweeping cleanly into the recessed radiator niche
+    const kitCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(APT.X4 - 0.012, py, livPipeExitZ),
+      new THREE.Vector3(APT.X4 + 0.22, py, livPipeExitZ),
+      new THREE.Vector3(APT.WIN_KIT_X0 - 0.04, py, livPipeExitZ),
+      new THREE.Vector3(APT.WIN_KIT_X0 + 0.025, py, APT.Z2 - 0.008),
+      new THREE.Vector3(APT.WIN_KIT_X0 + 0.085, py, livRadPortZ - 0.004),
+      new THREE.Vector3(kitValveStartX + 0.004, py, livRadPortZ),
+    ]);
+    const pipeMesh = new THREE.Mesh(
+      new THREE.TubeGeometry(kitCurve, 34, livPipeR, 12, false),
+      mats.windowFrameWhite
+    );
+    pipeMesh.castShadow = true;
+    pipeMesh.receiveShadow = true;
+    kitRadPipes.add(pipeMesh);
+
+    // Nickel shut-off ball valve body + hex ends + brass union into radiator manifold
+    const valveCenterX = kitValveStartX + livValveLen * 0.5;
+    const valveBody = new THREE.Mesh(livValveBodyGeo, mats.chromeBrushed);
+    valveBody.position.set(valveCenterX, py, livRadPortZ);
+    valveBody.castShadow = true;
+
+    const hexL = new THREE.Mesh(livValveHexGeo, mats.chromeBrushed);
+    hexL.position.set(kitValveStartX + 0.008, py, livRadPortZ);
+    const hexR = new THREE.Mesh(livValveHexGeo, mats.chromeBrushed);
+    hexR.position.set(kitValveStartX + livValveLen - 0.008, py, livRadPortZ);
+
+    const union = new THREE.Mesh(livUnionGeo, brassThreadMat);
+    union.position.set(kitRadWestPortX - livUnionLen * 0.5, py, livRadPortZ);
+
+    // Red butterfly shut-off handle facing into the Kitchen (-Z)
+    const stem = new THREE.Mesh(livValveStemGeo, mats.chromeBrushed);
+    stem.position.set(valveCenterX, py, livRadPortZ - 0.02);
+    const wing = new THREE.Mesh(livWingGeo, redValveHandleMat);
+    wing.position.set(valveCenterX, py, livRadPortZ - 0.031);
+    wing.rotation.z = 0.22;
+
+    kitRadPipes.add(valveBody, hexL, hexR, union, stem, wing);
+  }
+  southExtGroup.add(kitRadPipes);
 
   // 7) Right pier to East corner (X = WIN_KIT_X1 .. X7)
   southExtGroup.add(
@@ -2147,15 +2358,15 @@ export function buildApartmentShell(
   const interiorWalls = new THREE.Group();
   interiorWalls.name = 'InteriorWhitePartitions';
 
-  // 1) Bedroom / Living Room dividing wall (X = X1..X2, with 850 mm doorway at Z = 5.02..5.87)
+  // 1) Bedroom / Living Room dividing wall (X = X1..X2, with 850 mm doorway; Bedroom face = bedroomWallMat, Living face = aptWhiteWall)
   interiorWalls.add(
-    makeWhiteWall(APT.X1, APT.X2, 0, H, APT.Z1, APT.BED_DOOR_Z0, mats)
+    makeWhiteWall(APT.X1, APT.X2, 0, H, APT.Z1, APT.BED_DOOR_Z0, mats, 'split_bedroom_west')
   );
   interiorWalls.add(
-    makeWhiteWall(APT.X1, APT.X2, 2.1, H, APT.BED_DOOR_Z0, APT.BED_DOOR_Z1, mats)
+    makeWhiteWall(APT.X1, APT.X2, 2.1, H, APT.BED_DOOR_Z0, APT.BED_DOOR_Z1, mats, 'split_bedroom_west')
   );
   interiorWalls.add(
-    makeWhiteWall(APT.X1, APT.X2, 0, H, APT.BED_DOOR_Z1, APT.Z2, mats)
+    makeWhiteWall(APT.X1, APT.X2, 0, H, APT.BED_DOOR_Z1, APT.Z2, mats, 'split_bedroom_west')
   );
 
   // 2) Bedroom walk-in wardrobe / closet partition wall (100 mm thick, 2200 mm wide from West wall)
@@ -2167,7 +2378,8 @@ export function buildApartmentShell(
       H,
       APT.BED_CLOSET_Z - APT.THIN_T * 0.5,
       APT.BED_CLOSET_Z + APT.THIN_T * 0.5,
-      mats
+      mats,
+      'bedroom'
     )
   );
 
@@ -2235,6 +2447,21 @@ export function buildApartmentShell(
   );
   interiorWalls.add(kitchenArchCutCap);
 
+  // 3b) Slim copper-painted metal & clear-glass arched partition mounted flush near Living Room face
+  //     so both hinged doors open cleanly into the Living Room up to 180°
+  const archPartition = buildArchedMetalPartition(mats, {
+    width: archOpenZ1 - archOpenZ0,
+    topY: archTopY,
+    radius: archRadius,
+  });
+  archPartition.position.set(
+    APT.X3 + 0.022,
+    0,
+    (archOpenZ0 + archOpenZ1) * 0.5
+  );
+  archPartition.rotation.y = -Math.PI / 2;
+  interiorWalls.add(archPartition);
+
   // 5) Horizontal 1000 mm divider wall (12 cm) between Washing Machine niche (59 cm) & Kitchen Fridge niche (60 cm at corner)
   interiorWalls.add(
     makeWhiteWall(APT.X4, APT.X5, 0, H, APT.Z_HALL_S, APT.Z_HALL_S + APT.NICHE_DIVIDER_T, mats)
@@ -2288,6 +2515,28 @@ export function buildApartmentShell(
 
   ceilingGroup.add(ceilLeftCenter, ceilEntry, ceilKitchenEast);
   group.add(ceilingGroup);
+
+  // =========================================================================
+  // 5B. INTERIOR WALL FINISHES (10 OPTIONS), STRETCH CEILING & FURNITURE
+  // =========================================================================
+  const wallFinishSystem = buildWallFinishSystem(mats, anisotropy, {
+    northExtGroup,
+    interiorWalls,
+    ceilingGroup,
+  });
+
+  const furnitureSystem = buildApartmentFurniture(mats, anisotropy, {
+    rootGroup: group,
+    southExtGroup,
+    westExtGroup,
+    ceilingGroup,
+  });
+
+  const setDesignConfig = (config: DesignConfig) => {
+    wallFinishSystem.applyWallFinishes(config.wallFinish, config.bedroomWallFinish);
+    wallFinishSystem.applyCeilingStyle(config.ceilingStyle);
+    furnitureSystem.applyDesign(config);
+  };
 
   // =========================================================================
   // 6. FULL-APARTMENT 3D ARCHITECTURAL DIMENSIONS & ROOM LABELS
@@ -2410,10 +2659,13 @@ export function buildApartmentShell(
     setDimensionMode: dimensionsOverlay.setMode,
     setLightingMode,
     setFloorFinish,
+    setDesignConfig,
     updateCutaway,
     updateBalconyDoor,
     dispose: () => {
       isDisposed = true;
+      wallFinishSystem.dispose();
+      furnitureSystem.dispose();
       southFacade.dispose();
       westStreetTex?.dispose();
       westStreetMat.dispose();

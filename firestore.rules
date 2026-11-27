@@ -1,0 +1,171 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Pillar 3: Path variable & reusable primitives
+    function isValidShareId(id) {
+      return id is string && id.size() >= 8 && id.size() <= 16 && id.matches('^[a-zA-Z0-9]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isShortToken(val, maxLen) {
+      return val is string && val.size() >= 1 && val.size() <= maxLen && val.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isFiniteBounds(val, minVal, maxVal) {
+      return val is number && val >= minVal && val <= maxVal;
+    }
+
+    function isVec3(v) {
+      return v is list
+        && v.size() == 3
+        && isFiniteBounds(v[0], -100, 100)
+        && isFiniteBounds(v[1], -100, 100)
+        && isFiniteBounds(v[2], -100, 100);
+    }
+
+    function isOffsetVec3(v) {
+      return v is list
+        && v.size() == 3
+        && isFiniteBounds(v[0], -15, 15)
+        && isFiniteBounds(v[1], -5, 5)
+        && isFiniteBounds(v[2], -15, 15);
+    }
+
+    function isValidObjectEditEntry(entry) {
+      return entry is map
+        && entry.keys().hasAll(['id'])
+        && entry.keys().hasOnly(['id', 'offset', 'deleted'])
+        && isShortToken(entry.id, 64)
+        && (!('offset' in entry) || isOffsetVec3(entry.offset))
+        && (!('deleted' in entry) || entry.deleted is bool);
+    }
+
+    function isValidObjectEditsList(edits) {
+      return edits is list
+        && edits.size() <= 80
+        && (edits.size() == 0 || isValidObjectEditEntry(edits[0]));
+    }
+
+    function isValidDesignConfig(dc) {
+      return dc is map
+        && dc.keys().hasAll([
+          'wallFinish',
+          'bedroomWallFinish',
+          'ceilingStyle',
+          'tvZone',
+          'sofa',
+          'kitchen',
+          'bedroom',
+          'entryFurniture',
+          'curtains'
+        ])
+        && dc.keys().hasOnly([
+          'wallFinish',
+          'bedroomWallFinish',
+          'ceilingStyle',
+          'tvZone',
+          'sofa',
+          'kitchen',
+          'bedroom',
+          'entryFurniture',
+          'curtains'
+        ])
+        && isShortToken(dc.wallFinish, 32)
+        && isShortToken(dc.bedroomWallFinish, 32)
+        && isShortToken(dc.ceilingStyle, 32)
+        && isShortToken(dc.tvZone, 32)
+        && isShortToken(dc.sofa, 32)
+        && isShortToken(dc.kitchen, 32)
+        && isShortToken(dc.bedroom, 32)
+        && dc.entryFurniture is bool
+        && dc.curtains is bool;
+    }
+
+    function isValidSceneState(st) {
+      return st is map
+        && st.keys().hasAll([
+          'activePreset',
+          'walkMode',
+          'viewMode',
+          'lightingMode',
+          'floorFinish',
+          'dimensionMode',
+          'designConfig',
+          'objectEdits'
+        ])
+        && st.keys().hasOnly([
+          'activePreset',
+          'walkMode',
+          'viewMode',
+          'lightingMode',
+          'floorFinish',
+          'dimensionMode',
+          'designConfig',
+          'objectEdits'
+        ])
+        && isShortToken(st.activePreset, 32)
+        && st.walkMode is bool
+        && st.viewMode in ['cutaway', 'interior']
+        && st.lightingMode in ['daylight', 'warm3000', 'cozy2700']
+        && isShortToken(st.floorFinish, 32)
+        && st.dimensionMode in ['off', 'basic', 'detailed']
+        && isValidDesignConfig(st.designConfig)
+        && isValidObjectEditsList(st.objectEdits);
+    }
+
+    function isValidOrbitPose(orbit) {
+      return orbit is map
+        && orbit.keys().hasAll(['position', 'target', 'fov'])
+        && orbit.keys().hasOnly(['position', 'target', 'fov'])
+        && isVec3(orbit.position)
+        && isVec3(orbit.target)
+        && isFiniteBounds(orbit.fov, 20, 90);
+    }
+
+    function isValidWalkPose(walk) {
+      return walk is map
+        && walk.keys().hasAll(['x', 'z', 'yaw', 'pitch'])
+        && walk.keys().hasOnly(['x', 'z', 'yaw', 'pitch'])
+        && isFiniteBounds(walk.x, -50, 50)
+        && isFiniteBounds(walk.z, -50, 50)
+        && isFiniteBounds(walk.yaw, -100, 100)
+        && isFiniteBounds(walk.pitch, -1.5, 1.5);
+    }
+
+    function isValidCameraState(cam) {
+      return cam is map
+        && cam.keys().hasOnly(['orbit', 'walk'])
+        && (!('orbit' in cam) || isValidOrbitPose(cam.orbit))
+        && (!('walk' in cam) || isValidWalkPose(cam.walk));
+    }
+
+    // Pillar 2: Standalone Validation Blueprint
+    function isValidSharedScene(data) {
+      return data is map
+        && data.keys().hasAll(['version', 'createdAt', 'state', 'camera'])
+        && data.keys().hasOnly(['version', 'createdAt', 'state', 'camera'])
+        && data.version == 1
+        && data.createdAt == request.time
+        && isValidSceneState(data.state)
+        && isValidCameraState(data.camera);
+    }
+
+    // Shared 3D scene snapshots: public get by unguessable ID, immutable create, zero list/update/delete
+    match /sharedScenes/{shareId} {
+      allow get: if isValidShareId(shareId);
+      allow list: if false;
+      allow create: if isValidShareId(shareId) && isValidSharedScene(incoming());
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}

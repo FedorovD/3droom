@@ -18,6 +18,8 @@ export interface MaterialLibrary {
   ceilingWhite: THREE.MeshStandardMaterial;
   aptWhiteWall: THREE.MeshStandardMaterial;
   aptWallCutCap: THREE.MeshStandardMaterial;
+  bedroomWallMat: THREE.MeshStandardMaterial;
+  bedroomWallCutCap: THREE.MeshStandardMaterial;
   concreteScreed: THREE.MeshStandardMaterial;
   balconyFloor: THREE.MeshStandardMaterial;
   windowFrameWhite: THREE.MeshStandardMaterial;
@@ -30,8 +32,15 @@ export interface MaterialLibrary {
   glassScreen: THREE.MeshStandardMaterial;
   emissiveWarmLed: THREE.MeshStandardMaterial;
   emissiveSpotLed: THREE.MeshStandardMaterial;
+  lampShadeEmissive: THREE.MeshStandardMaterial;
   pipeRed: THREE.MeshStandardMaterial;
   pipeBlue: THREE.MeshStandardMaterial;
+  vanitySageMatte: THREE.MeshStandardMaterial;
+  vanityBlackFrame: THREE.MeshStandardMaterial;
+  copperMetal: THREE.MeshStandardMaterial;
+  copperMetalDark: THREE.MeshStandardMaterial;
+  archPartitionGlass: THREE.MeshPhysicalMaterial;
+  showerProfileBronze: THREE.MeshStandardMaterial;
   dispose: () => void;
 }
 
@@ -1216,6 +1225,21 @@ export function createMaterialLibrary(
     envMapIntensity: 0.15,
   });
 
+  // Independent wall material pair for Bedroom & Walk-in Closet (supports per-room paint schemes)
+  const bedroomWallMat = new THREE.MeshStandardMaterial({
+    map: plasterWallMap,
+    roughness: 0.93,
+    metalness: 0.0,
+    envMapIntensity: 0.2,
+  });
+
+  const bedroomWallCutCap = new THREE.MeshStandardMaterial({
+    color: 0xbab8b1,
+    roughness: 0.95,
+    metalness: 0.0,
+    envMapIntensity: 0.15,
+  });
+
   const concreteScreed = new THREE.MeshStandardMaterial({
     map: screed.map,
     bumpMap: screed.bumpMap,
@@ -1318,6 +1342,15 @@ export function createMaterialLibrary(
     metalness: 0,
   });
 
+  // Warm linen / frosted alabaster shade material driven dynamically by lighting mode (daylight vs 3000K vs 2700K)
+  const lampShadeEmissive = new THREE.MeshStandardMaterial({
+    color: 0xf4efe4,
+    emissive: 0xffd396,
+    emissiveIntensity: 0.08,
+    roughness: 0.82,
+    metalness: 0.0,
+  });
+
   const pipeRed = new THREE.MeshStandardMaterial({
     color: 0xb94a48,
     roughness: 0.48,
@@ -1328,6 +1361,59 @@ export function createMaterialLibrary(
     color: 0x3b6696,
     roughness: 0.48,
     metalness: 0.1,
+  });
+
+  // Lauter Lea 80 vanity: muted grey-green semi-matte enamel (серо-зеленый п/мат)
+  const vanitySageMatte = new THREE.MeshStandardMaterial({
+    color: 0x72796b,
+    roughness: 0.48,
+    metalness: 0.04,
+    envMapIntensity: 0.48,
+  });
+
+  // Lauter Lea 80 vanity: powder-coated matte black steel square-tube frame
+  const vanityBlackFrame = new THREE.MeshStandardMaterial({
+    color: 0x1b1d1f,
+    roughness: 0.44,
+    metalness: 0.55,
+    envMapIntensity: 0.62,
+  });
+
+  // Arched Living/Kitchen partition: satin copper-bronze painted architectural steel profile
+  const copperMetal = new THREE.MeshStandardMaterial({
+    color: 0x9b5a3c,
+    roughness: 0.34,
+    metalness: 0.74,
+    envMapIntensity: 1.05,
+  });
+
+  // Darker copper-bronze accent for recessed beads, hinges & vertical pull handles
+  const copperMetalDark = new THREE.MeshStandardMaterial({
+    color: 0x6f3f29,
+    roughness: 0.3,
+    metalness: 0.78,
+    envMapIntensity: 1.1,
+  });
+
+  // 6-8 mm clear architectural tempered glass for the arched metal partition & shower screen
+  const archPartitionGlass = new THREE.MeshPhysicalMaterial({
+    color: 0xeaf2ee,
+    transparent: true,
+    opacity: 0.22,
+    roughness: 0.06,
+    metalness: 0.12,
+    reflectivity: 0.92,
+    envMapIntensity: 1.35,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
+  // MaybahGlass 43x190 shower screen: brushed warm bronze-champagne aluminum profile & stabilizer rod
+  const showerProfileBronze = new THREE.MeshStandardMaterial({
+    color: 0x8d7860,
+    roughness: 0.3,
+    metalness: 0.78,
+    envMapIntensity: 1.05,
   });
 
   const allMaterials = [
@@ -1348,6 +1434,8 @@ export function createMaterialLibrary(
     ceilingWhite,
     aptWhiteWall,
     aptWallCutCap,
+    bedroomWallMat,
+    bedroomWallCutCap,
     concreteScreed,
     balconyFloor,
     windowFrameWhite,
@@ -1360,8 +1448,15 @@ export function createMaterialLibrary(
     glassScreen,
     emissiveWarmLed,
     emissiveSpotLed,
+    lampShadeEmissive,
     pipeRed,
     pipeBlue,
+    vanitySageMatte,
+    vanityBlackFrame,
+    copperMetal,
+    copperMetalDark,
+    archPartitionGlass,
+    showerProfileBronze,
   ];
 
   return {
@@ -1382,6 +1477,8 @@ export function createMaterialLibrary(
     ceilingWhite,
     aptWhiteWall,
     aptWallCutCap,
+    bedroomWallMat,
+    bedroomWallCutCap,
     concreteScreed,
     balconyFloor,
     windowFrameWhite,
@@ -1394,8 +1491,15 @@ export function createMaterialLibrary(
     glassScreen,
     emissiveWarmLed,
     emissiveSpotLed,
+    lampShadeEmissive,
     pipeRed,
     pipeBlue,
+    vanitySageMatte,
+    vanityBlackFrame,
+    copperMetal,
+    copperMetalDark,
+    archPartitionGlass,
+    showerProfileBronze,
     dispose: () => {
       texturesToDispose.forEach((t) => t.dispose());
       allMaterials.forEach((m) => m.dispose());

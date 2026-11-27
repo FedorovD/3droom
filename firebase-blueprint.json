@@ -1,0 +1,35 @@
+{
+  "entities": {
+    "SharedScene": {
+      "title": "SharedScene",
+      "description": "Immutable snapshot of the 3D apartment scene configuration, edited object transforms/visibility, and camera poses shared via a short URL parameter (?s=<shareId>). Contains zero PII.",
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number",
+          "description": "Schema version number (must equal 1)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the shared snapshot was created."
+        },
+        "state": {
+          "type": "object",
+          "description": "Persisted 3D scene settings, finishes, furniture configuration, and object edits map."
+        },
+        "camera": {
+          "type": "object",
+          "description": "Saved Orbit and Walk camera poses for restoring the exact viewpoint."
+        }
+      },
+      "required": ["version", "createdAt", "state", "camera"]
+    }
+  },
+  "firestore": {
+    "/sharedScenes/{shareId}": {
+      "schema": { "$ref": "#/entities/SharedScene" },
+      "description": "Publicly readable (by exact unguessable ID only), immutable shared 3D apartment scene snapshots. Listing, updating, and deleting are strictly forbidden."
+    }
+  }
+}
