@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import brestStreetViewUrl from '../assets/images/brest_lenina36_view_1795614550507.jpg';
+import brestStreetViewUrl from '../assets/images/brest_south_panorama.jpg';
 import { APT, LightingMode } from './dimensions';
 import { MaterialLibrary } from './textures';
 
@@ -1120,66 +1120,96 @@ export function buildSouthFacade(
   balconyGroup.add(outerInst, coreInst);
 
   // =========================================================================
-  // 7. CURVED 3RD-FLOOR PANORAMIC STREET-VIEW BACKDROP (Brest, ul. Lenina 36)
-  //    Concave BackSide cylinder arc positioned 22.5 m beyond the South windows so
-  //    looking out the Living Room window, Balcony door & Kitchen window reveals the
-  //    real third-floor vista over ul. Lenina, Lenin Square, Executive Committee & Church
-  //    with true 3D parallax against the balcony railing, pigeon & wooden oak sills!
+  // 7. CURVED 3RD-FLOOR PANORAMIC STREET-VIEW BACKDROP (Real photo from balcony)
+  //    Concave BackSide cylinder arc matching the real 3200x1196 balcony panorama
+  //    (Brest City Emergency Hospital across ul. Lenina, pink corner building & street)
   // =========================================================================
   const vistaRadius = 25.0;
-  const vistaArcRad = (115 * Math.PI) / 180;
-  const vistaArcLen = vistaRadius * vistaArcRad; // ~50.18 m
-  const vistaHeight = vistaArcLen * (9 / 16); // Exact 16:9 image aspect (~28.23 m)
+  const vistaArcRad = (146 * Math.PI) / 180;
+  const vistaArcLen = vistaRadius * vistaArcRad; // ~63.70 m
+  const vistaHeight = vistaArcLen * (1196 / 3200); // Exact 3200x1196 image aspect (~23.81 m)
 
   const vistaGeo = new THREE.CylinderGeometry(
     vistaRadius,
     vistaRadius,
     vistaHeight,
-    48,
+    64,
     1,
     true,
     -vistaArcRad * 0.5,
     vistaArcRad
   );
   // Flip U horizontally for BackSide inner-arc viewing so street & landmarks are never mirrored
-  // (left when looking South = historic Brest houses, center = Lenin Square, right = twin-tower Church)
+  // (left when looking South = ul. Lenina East, center = Hospital, right = pink building / Lenin Sq)
   const vistaUv = vistaGeo.attributes.uv;
   for (let i = 0; i < vistaUv.count; i++) {
     vistaUv.setX(i, 1 - vistaUv.getX(i));
   }
   vistaUv.needsUpdate = true;
 
-  const streetTex = new THREE.TextureLoader().load(brestStreetViewUrl, () => {
-    onAssetLoaded?.();
-  });
-  streetTex.colorSpace = THREE.SRGBColorSpace;
-  streetTex.anisotropy = anisotropy;
-  streetTex.wrapS = THREE.ClampToEdgeWrapping;
-  streetTex.wrapT = THREE.ClampToEdgeWrapping;
-  texturesToDispose.push(streetTex);
-
   const streetMat = new THREE.MeshBasicMaterial({
-    map: streetTex,
     side: THREE.BackSide,
     fog: false,
     toneMapped: true,
-    color: 0xf6f6f4,
+    color: 0xd6dbe0,
   });
   materialsToDispose.push(streetMat);
 
+  let isDisposed = false;
+  let activeLightingMode: LightingMode = 'daylight';
+  let streetTexLoaded = false;
+
+  const applyStreetTint = () => {
+    if (!streetTexLoaded) {
+      streetMat.color.setHex(activeLightingMode === 'daylight' ? 0xd6dbe0 : 0x5c5754);
+      return;
+    }
+    streetMat.color.setHex(activeLightingMode === 'daylight' ? 0xf8f8f6 : 0x887d76);
+  };
+
+  const loadStreetPanorama = (withCors: boolean) => {
+    const img = new Image();
+    img.decoding = 'async';
+    if (withCors) {
+      img.crossOrigin = 'anonymous';
+    }
+    img.onload = () => {
+      if (isDisposed) return;
+      const tex = new THREE.Texture(img);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = anisotropy;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+      tex.needsUpdate = true;
+      texturesToDispose.push(tex);
+      streetTexLoaded = true;
+      streetMat.map = tex;
+      applyStreetTint();
+      streetMat.needsUpdate = true;
+      onAssetLoaded?.();
+    };
+    img.onerror = () => {
+      if (isDisposed) return;
+      if (withCors) {
+        loadStreetPanorama(false);
+      }
+    };
+    img.src = brestStreetViewUrl;
+  };
+  loadStreetPanorama(true);
+
   const vistaMesh = new THREE.Mesh(vistaGeo, streetMat);
-  // Center curvature inside Living Room/Kitchen hub; horizon (50% V) aligns with 3rd-floor eye height (1.65 m)
-  vistaMesh.position.set(6.2, 1.65, 4.5);
+  // Center curvature around Living Room/Balcony hub; 3rd-floor horizon aligns with eye level
+  vistaMesh.position.set(5.6, 1.15, 6.2);
   vistaMesh.renderOrder = 0;
   streetBackdropGroup.add(vistaMesh);
 
   const setLightingMode = (mode: LightingMode) => {
-    if (mode === 'daylight') {
-      streetMat.color.setHex(0xf6f6f4);
-    } else {
-      // Soft golden-dusk dimming when warm interior evening lighting is selected
-      streetMat.color.setHex(0x887d76);
-    }
+    activeLightingMode = mode;
+    applyStreetTint();
   };
 
   // Subtle unused reference check prevention — keep mats signature consistent if extended later
@@ -1191,6 +1221,7 @@ export function buildSouthFacade(
     streetBackdropGroup,
     setLightingMode,
     dispose: () => {
+      isDisposed = true;
       texturesToDispose.forEach((t) => t.dispose());
       materialsToDispose.forEach((m) => m.dispose());
     },

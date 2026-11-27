@@ -33,19 +33,9 @@ jobs:
       - name: TypeScript typecheck
         run: npm run lint
 
-      - name: Compute GitHub Pages base path
-        id: basepath
-        run: |
-          REPO="${GITHUB_REPOSITORY#*/}"
-          if [[ "$REPO" == *.github.io ]]; then
-            echo "base=/" >> "$GITHUB_OUTPUT"
-          else
-            echo "base=/${REPO}/" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build with Vite
         env:
-          VITE_BASE_PATH: ${{ steps.basepath.outputs.base }}
+          VITE_BASE_PATH: './'
         run: npm run build
 
       - name: Upload Pages artifact

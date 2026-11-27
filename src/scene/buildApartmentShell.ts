@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import brestBedroomPanoramaUrl from '../assets/images/brest_bedroom_panorama_1795643595884.jpg';
+import brestBedroomPanoramaUrl from '../assets/images/brest_west_panorama.jpg';
 import { buildSouthFacade } from './buildSouthFacade';
 import {
   APT,
@@ -487,7 +487,7 @@ function createEntryDoor(
 function createWhiteRadiator(
   sections: number,
   mats: MaterialLibrary,
-  sidePiped = false
+  sidePiped: boolean | 'posX' | 'negX' = false
 ): THREE.Group {
   const g = new THREE.Group();
   g.name = 'WhiteRadiator';
@@ -565,13 +565,18 @@ function createWhiteRadiator(
   const thermoHead = new THREE.Mesh(thermoGeo, mats.windowFrameWhite);
   thermoHead.position.set(valveX + 0.042, upperY, pipeZ);
 
-  // Chrome air vent plug on opposite top end
+  // Chrome air vent plug on the non-piped top end
   const ventPlug = new THREE.Mesh(
     new THREE.CylinderGeometry(0.011, 0.011, 0.016, 12),
     mats.chromeBrushed
   );
   ventPlug.rotation.z = Math.PI / 2;
-  ventPlug.position.set(-totalW * 0.5 - 0.012, upperY, pipeZ);
+  const ventOnPosX = sidePiped === 'negX';
+  ventPlug.position.set(
+    ventOnPosX ? totalW * 0.5 + 0.012 : -totalW * 0.5 - 0.012,
+    upperY,
+    pipeZ
+  );
 
   // Slim white feed/return pipe stubs turning cleanly back into the wall
   const stubGeo = new THREE.CylinderGeometry(0.0085, 0.0085, pipeZ, 10);
@@ -1105,7 +1110,8 @@ function buildApartmentDimensions(): {
   // --- 5. САНУЗЕЛ (Room 1: X = 8.44..10.08, Z = 1.55..4.31) ---
   const bathDoorZ0 = APT.Z1 + ROOM.DOOR_X0; // 2.23
   const bathDoorZ1 = APT.Z1 + ROOM.DOOR_X1; // 2.99
-  const colZ0 = APT.Z1 + ROOM.COL_X0; // 3.24
+  const colZ0 = APT.Z1 + ROOM.COL_X0; // 3.04
+  const ledgeFrontZ = APT.Z_BATH_S - ROOM.LEDGE_DEPTH; // 4.09
   const colFaceX = APT.X7 - ROOM.COL_Z; // 9.805
 
   // Overall bathroom widths & length
@@ -1118,11 +1124,11 @@ function buildApartmentDimensions(): {
   addZ(bathDoorZ0, bathDoorZ1, APT.X6 + 0.12, 'door', 'дверь 76'); // 76 см Bathroom doorway
   addZ(bathDoorZ1, APT.Z_BATH_S, APT.X6 + 0.12, 'wall'); // 132 см South pier to toilet wall
 
-  // East wall: Shower zone + Protruding Terrazzo wall + Ledge
-  addZ(bathDoorZ0, colZ0, APT.X7 - 0.12, 'wall'); // 101 см Shower zone
-  addZ(colZ0, APT.Z_BATH_S, colFaceX - 0.12, 'wall'); // 107 см Protruding Terrazzo wall
+  // East wall: Shower zone (81) + Protruding Terrazzo sink wall (105) + Ledge (22)
+  addZ(bathDoorZ0, colZ0, APT.X7 - 0.12, 'wall'); // 81 см Shower zone
+  addZ(colZ0, ledgeFrontZ, colFaceX - 0.12, 'wall'); // 105 см Protruding Terrazzo sink wall
   addX(colFaceX, APT.X7, colZ0 - 0.08, 'wall'); // 28 см Terrazzo column depth
-  addZ(APT.Z_BATH_S - ROOM.LEDGE_DEPTH, APT.Z_BATH_S, APT.X6 + 0.45, 'wall'); // 22 см Toilet ledge depth
+  addZ(ledgeFrontZ, APT.Z_BATH_S, APT.X6 + 0.45, 'wall'); // 22 см Toilet ledge depth
 
   g.add(basicGroup, detailedGroup);
 
@@ -1215,13 +1221,20 @@ export function buildApartmentShell(
   // 2. APARTMENT FLOORS (Screed or Selected Finish) — EVERY ROOM EXCEPT BATHROOM
   //    (Bathroom keeps its own flush Terrazzo porcelain tile floor!)
   // =========================================================================
+  // Recessed under-window radiator niche depth (13 cm into 36 cm exterior masonry wall, so radiator front sits flush/tucked inside)
+  const radNicheD = 0.13;
+
   const floorGroup = new THREE.Group();
   floorGroup.name = 'ApartmentFloors';
   const floorMeshes: THREE.Mesh[] = [
     // Left + Center rooms (Bedroom 5 + Living Room 4 + West Kitchen/Hallway strip X = 0 .. X5)
     makeScreedSlab(APT.X0, APT.X5 + 0.04, APT.Z1, APT.Z2, mats),
-    // Screed floor continuation inside the Bedroom walk-in closet recessed radiator niche (South wall)
-    makeScreedSlab(1.26, 2.31, APT.Z2 - 0.01, APT.Z2 + 0.11, mats),
+    // Floor continuation inside the Bedroom walk-in closet recessed radiator niche (South wall)
+    makeScreedSlab(1.26, 2.31, APT.Z2, APT.Z2 + 0.11, mats),
+    // Floor continuations inside the 3 recessed under-window radiator niches (Bedroom, Living Room, Kitchen)
+    makeScreedSlab(-radNicheD, APT.X0, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats),
+    makeScreedSlab(APT.WIN_LIV_X0, APT.WIN_LIV_X1, APT.Z2, APT.Z2 + radNicheD, mats),
+    makeScreedSlab(APT.WIN_KIT_X0, APT.WIN_KIT_X1, APT.Z2, APT.Z2 + radNicheD, mats),
     // Entry Hallway upper vestibule (2610 x 1475 mm) + 900 mm archway threshold floor
     makeScreedSlab(APT.X_HALL_W, APT.X_VEST_E + 0.02, APT.Z0, APT.Z_ARCH_N + 0.02, mats),
     makeScreedSlab(APT.X_ARCH_L - 0.02, APT.X_ARCH_R + 0.02, APT.Z_ARCH_N, APT.Z1 + 0.02, mats),
@@ -1317,54 +1330,88 @@ export function buildApartmentShell(
   const streetBackdropGroup = southFacade.streetBackdropGroup;
   group.add(balconyGroup, streetBackdropGroup);
 
-  // Curved 3rd-floor West Panorama Backdrop outside the two Bedroom windows:
-  // Right window (North, Z = 1.90..2.90) frames the white twin-tower Church of the Exaltation of the Holy Cross
-  // and red-ribbon Christmas tree (matching the user's real photo from the right window);
-  // Left window (South, Z = 3.22..4.22, with radiator) continues seamlessly across Lenin Square & Executive Committee.
+  // Curved 3rd-floor West Panorama Backdrop outside the two Bedroom windows (real photo from left window):
+  // Left side (-X/+Z) shows ul. Lenina & pink corner building, center frames the tree & Lenin Square,
+  // and right side (-X/-Z, right window) frames the white twin-tower Church of the Exaltation of the Holy Cross.
   const westBackdropGroup = new THREE.Group();
   westBackdropGroup.name = 'BrestBedroomWestPanorama';
 
   const westRadius = 22.0;
-  const westArcRad = (92 * Math.PI) / 180;
-  const westArcLen = westRadius * westArcRad; // ~35.33 m
-  const westHeight = westArcLen * (9 / 16); // Exact 16:9 image aspect (~19.87 m)
+  const westArcRad = (126 * Math.PI) / 180;
+  const westArcLen = westRadius * westArcRad; // ~48.38 m
+  const westHeight = westArcLen * (1442 / 3200); // Exact 3200x1442 image aspect (~21.80 m)
 
   const westVistaGeo = new THREE.CylinderGeometry(
     westRadius,
     westRadius,
     westHeight,
-    48,
+    64,
     1,
     true,
     -Math.PI / 2 - westArcRad * 0.5,
     westArcRad
   );
   // Flip U for BackSide inner-arc viewing so right window (-Z) shows the Church (image right)
-  // and left window (+Z) shows Lenin Square & Executive Committee (image left) unmirrored
+  // and left window (+Z) shows ul. Lenina & Lenin Square (image left) unmirrored
   const westUv = westVistaGeo.attributes.uv;
   for (let i = 0; i < westUv.count; i++) {
     westUv.setX(i, 1 - westUv.getX(i));
   }
   westUv.needsUpdate = true;
 
-  const westStreetTex = new THREE.TextureLoader().load(brestBedroomPanoramaUrl, () => {
-    onAssetLoaded?.();
-  });
-  westStreetTex.colorSpace = THREE.SRGBColorSpace;
-  westStreetTex.anisotropy = anisotropy;
-  westStreetTex.wrapS = THREE.ClampToEdgeWrapping;
-  westStreetTex.wrapT = THREE.ClampToEdgeWrapping;
-
   const westStreetMat = new THREE.MeshBasicMaterial({
-    map: westStreetTex,
     side: THREE.BackSide,
     fog: false,
     toneMapped: true,
-    color: 0xf6f6f4,
+    color: 0xd6dbe0,
   });
 
+  let westStreetTex: THREE.Texture | null = null;
+  let westLightingMode: LightingMode = 'daylight';
+
+  const applyWestTint = () => {
+    if (!westStreetTex) {
+      westStreetMat.color.setHex(westLightingMode === 'daylight' ? 0xd6dbe0 : 0x5c5754);
+      return;
+    }
+    westStreetMat.color.setHex(westLightingMode === 'daylight' ? 0xf8f8f6 : 0x887d76);
+  };
+
+  const loadWestPanorama = (withCors: boolean) => {
+    const img = new Image();
+    img.decoding = 'async';
+    if (withCors) {
+      img.crossOrigin = 'anonymous';
+    }
+    img.onload = () => {
+      if (isDisposed) return;
+      const tex = new THREE.Texture(img);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = anisotropy;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = true;
+      tex.needsUpdate = true;
+      westStreetTex = tex;
+      westStreetMat.map = tex;
+      applyWestTint();
+      westStreetMat.needsUpdate = true;
+      onAssetLoaded?.();
+    };
+    img.onerror = () => {
+      if (isDisposed) return;
+      if (withCors) {
+        loadWestPanorama(false);
+      }
+    };
+    img.src = brestBedroomPanoramaUrl;
+  };
+  loadWestPanorama(true);
+
   const westVistaMesh = new THREE.Mesh(westVistaGeo, westStreetMat);
-  westVistaMesh.position.set(2.6, 2.25, 4.5);
+  westVistaMesh.position.set(1.4, 1.55, 3.3);
   westVistaMesh.renderOrder = 0;
   westBackdropGroup.add(westVistaMesh);
   group.add(westBackdropGroup);
@@ -1483,9 +1530,9 @@ export function buildApartmentShell(
     makeWhiteWall(-ET, 0, 0, H, APT.WIN_BED1_Z1, APT.WIN_BED2_Z0, mats)
   );
 
-  // 4) Window 2 (South / left when facing West): below sill + header + 2-pane PVC window
+  // 4) Window 2 (South / left when facing West): recessed under-sill radiator niche + header + 2-pane PVC window
   westExtGroup.add(
-    makeWhiteWall(-ET, 0, 0, APT.WIN_SILL_Y, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats)
+    makeWhiteWall(-ET, -radNicheD, 0, APT.WIN_SILL_Y, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats)
   );
   westExtGroup.add(
     makeWhiteWall(-ET, 0, APT.WIN_TOP_Y, H, APT.WIN_BED2_Z0, APT.WIN_BED2_Z1, mats)
@@ -1501,11 +1548,69 @@ export function buildApartmentShell(
   bedWin2.position.set(-ET * 0.45, winMidY, (APT.WIN_BED2_Z0 + APT.WIN_BED2_Z1) * 0.5);
   westExtGroup.add(bedWin2);
 
-  // White sectional heating radiator mounted beneath the LEFT Bedroom window (Window 2, facing +X into room)
-  const bedRadiator = createWhiteRadiator(8, mats);
+  // White 8-section heating radiator recessed inside the LEFT Bedroom window niche (facing +X into room)
+  const bedRadSections = 8;
+  const bedRadW = bedRadSections * 0.08; // 0.64 m
+  const bedRadZ = (APT.WIN_BED2_Z0 + APT.WIN_BED2_Z1) * 0.5 - 0.02; // 3.70 m (slightly right to clear left feed pipes)
+  const bedRadiator = createWhiteRadiator(bedRadSections, mats, 'negX');
   bedRadiator.rotation.y = Math.PI / 2;
-  bedRadiator.position.set(0, 0.42, (APT.WIN_BED2_Z0 + APT.WIN_BED2_Z1) * 0.5);
+  bedRadiator.position.set(-radNicheD, 0.42, bedRadZ);
   westExtGroup.add(bedRadiator);
+
+  // Two parallel horizontal white PPR heating pipes running from the closet partition along the West wall into the recessed bedroom radiator (per photo)
+  const bedPartNorthZ = APT.BED_CLOSET_Z - APT.THIN_T * 0.5; // 5.45 m
+  const bedRadSouthPortZ = bedRadZ + bedRadW * 0.5; // 4.02 m
+  const bedElbowZ = APT.WIN_BED2_Z1 - 0.032; // 4.188 m (steps into niche just past reveal)
+  const bedRadPortX = -radNicheD + (0.032 + 0.072 * 0.52); // -0.06056 m (radiator manifold X)
+  const bedPipeX = 0.044; // Matches closet West-wall PPR pipe plane
+  const bedRunLen = bedPartNorthZ - bedElbowZ;
+  const bedJogLen = bedPipeX - bedRadPortX;
+  const bedStubLen = bedElbowZ - bedRadSouthPortZ;
+
+  const bedPipesGroup = new THREE.Group();
+  bedPipesGroup.name = 'BedroomWestRadiatorPipes';
+  const bedRunGeo = new THREE.CylinderGeometry(0.012, 0.012, bedRunLen, 10);
+  bedRunGeo.rotateX(Math.PI / 2);
+  const bedJogGeo = new THREE.CylinderGeometry(0.012, 0.012, bedJogLen, 10);
+  bedJogGeo.rotateZ(Math.PI / 2);
+  const bedStubGeo = new THREE.CylinderGeometry(0.012, 0.012, bedStubLen, 10);
+  bedStubGeo.rotateX(Math.PI / 2);
+  const bedCollarGeo = new THREE.CylinderGeometry(0.019, 0.019, 0.014, 12);
+  bedCollarGeo.rotateX(Math.PI / 2);
+  const bedElbowGeo = new THREE.SphereGeometry(0.015, 10, 8);
+  const bedUnionGeo = new THREE.CylinderGeometry(0.016, 0.016, 0.026, 10);
+  bedUnionGeo.rotateX(Math.PI / 2);
+  const bedClipGeo = new THREE.BoxGeometry(bedPipeX, 0.016, 0.016);
+
+  for (const py of [0.42 + 0.56 * 0.5 - 0.055, 0.42 - 0.56 * 0.5 + 0.055]) {
+    const runPipe = new THREE.Mesh(bedRunGeo, mats.windowFrameWhite);
+    runPipe.position.set(bedPipeX, py, (bedPartNorthZ + bedElbowZ) * 0.5);
+    runPipe.castShadow = true;
+    bedPipesGroup.add(runPipe);
+
+    const collar = new THREE.Mesh(bedCollarGeo, mats.windowFrameWhite);
+    collar.position.set(bedPipeX, py, bedPartNorthZ - 0.007);
+    bedPipesGroup.add(collar);
+
+    for (const cz of [5.12, 4.62]) {
+      const clip = new THREE.Mesh(bedClipGeo, mats.windowFrameWhite);
+      clip.position.set(bedPipeX * 0.5, py, cz);
+      bedPipesGroup.add(clip);
+    }
+
+    const elbow1 = new THREE.Mesh(bedElbowGeo, mats.windowFrameWhite);
+    elbow1.position.set(bedPipeX, py, bedElbowZ);
+    const jog = new THREE.Mesh(bedJogGeo, mats.windowFrameWhite);
+    jog.position.set((bedPipeX + bedRadPortX) * 0.5, py, bedElbowZ);
+    const elbow2 = new THREE.Mesh(bedElbowGeo, mats.windowFrameWhite);
+    elbow2.position.set(bedRadPortX, py, bedElbowZ);
+    const stub = new THREE.Mesh(bedStubGeo, mats.windowFrameWhite);
+    stub.position.set(bedRadPortX, py, (bedElbowZ + bedRadSouthPortZ) * 0.5);
+    const unionNut = new THREE.Mesh(bedUnionGeo, mats.chromePolished);
+    unionNut.position.set(bedRadPortX, py, bedRadSouthPortZ + 0.012);
+    bedPipesGroup.add(elbow1, jog, elbow2, stub, unionNut);
+  }
+  westExtGroup.add(bedPipesGroup);
 
   // 5) South pier down to South corner (Z = WIN_BED2_Z1 .. Z2 + ET)
   westExtGroup.add(
@@ -1948,9 +2053,9 @@ export function buildApartmentShell(
     southClosetPipes.add(elbow1, jog, elbow2, stub, unionNut);
   }
   southExtGroup.add(southClosetPipes);
-  // 2) Under Living Room Window (X = WIN_LIV_X0 .. WIN_LIV_X1, 1120 mm wide)
+  // 2) Under Living Room Window (X = WIN_LIV_X0 .. WIN_LIV_X1, 1120 mm wide) — recessed radiator niche
   southExtGroup.add(
-    makeWhiteWall(APT.WIN_LIV_X0, APT.WIN_LIV_X1, 0, APT.WIN_SILL_Y, APT.Z2, APT.Z2 + ET, mats)
+    makeWhiteWall(APT.WIN_LIV_X0, APT.WIN_LIV_X1, 0, APT.WIN_SILL_Y, APT.Z2 + radNicheD, APT.Z2 + ET, mats)
   );
   // 2b) Solid 300 mm masonry pier between Living Room Window (1120) & Balcony Door block (1100)
   southExtGroup.add(
@@ -1975,10 +2080,10 @@ export function buildApartmentShell(
   );
   southExtGroup.add(livWin);
 
-  // White sectional heating radiator under Living Room window (facing -Z into Living Room)
+  // White sectional heating radiator recessed inside the Living Room under-window niche (facing -Z into Living Room)
   const livRadiator = createWhiteRadiator(10, mats);
   livRadiator.rotation.y = Math.PI;
-  livRadiator.position.set((APT.WIN_LIV_X0 + APT.WIN_LIV_X1) * 0.5, 0.42, APT.Z2);
+  livRadiator.position.set((APT.WIN_LIV_X0 + APT.WIN_LIV_X1) * 0.5, 0.42, APT.Z2 + radNicheD);
   southExtGroup.add(livRadiator);
 
   // Living Room Full-Height Balcony Door (with operable hinged leaf for Walk Mode)
@@ -1999,9 +2104,9 @@ export function buildApartmentShell(
   southExtGroup.add(
     makeWhiteWall(APT.BALC_DOOR_X1, APT.WIN_KIT_X0, 0, H, APT.Z2, APT.Z2 + ET, mats)
   );
-  // 5) Under Kitchen Window
+  // 5) Under Kitchen Window — recessed radiator niche
   southExtGroup.add(
-    makeWhiteWall(APT.WIN_KIT_X0, APT.WIN_KIT_X1, 0, APT.WIN_SILL_Y, APT.Z2, APT.Z2 + ET, mats)
+    makeWhiteWall(APT.WIN_KIT_X0, APT.WIN_KIT_X1, 0, APT.WIN_SILL_Y, APT.Z2 + radNicheD, APT.Z2 + ET, mats)
   );
   // 6) Header above Kitchen Window
   southExtGroup.add(
@@ -2022,10 +2127,10 @@ export function buildApartmentShell(
   );
   southExtGroup.add(kitWin);
 
-  // White sectional heating radiator under Kitchen window (facing -Z into Kitchen)
+  // White sectional heating radiator recessed inside the Kitchen under-window niche (facing -Z into Kitchen)
   const kitRadiator = createWhiteRadiator(10, mats);
   kitRadiator.rotation.y = Math.PI;
-  kitRadiator.position.set((APT.WIN_KIT_X0 + APT.WIN_KIT_X1) * 0.5, 0.42, APT.Z2);
+  kitRadiator.position.set((APT.WIN_KIT_X0 + APT.WIN_KIT_X1) * 0.5, 0.42, APT.Z2 + radNicheD);
   southExtGroup.add(kitRadiator);
 
   // 7) Right pier to East corner (X = WIN_KIT_X1 .. X7)
@@ -2223,20 +2328,18 @@ export function buildApartmentShell(
     }
 
     // Show the 3rd-floor Brest ul. Lenina 36 street view whenever looking outward through the South
-    // windows/balcony (Interior Mode, Walk Mode, or inside-looking-South angles), while hiding it
-    // cleanly in Top Plan, exterior Balcony facade view, and far South cutaway overviews.
+    // windows or standing on the balcony (cameraPos.z < 10.05 automatically hides it in the far
+    // exterior Balcony facade preset at z = 12.5 and in Top Plan / far cutaway overviews).
     nextBackdrop =
       nextSouth &&
       !isTopPlan &&
-      activePreset !== 'balcony' &&
       cameraPos.z < APT.Z2 + 3.0;
 
     // Show the Bedroom West panorama whenever inside the apartment with the West wall visible,
-    // hiding cleanly in Top Plan, exterior Balcony view, or exterior cutaway orbits.
+    // hiding cleanly in Top Plan or exterior cutaway orbits.
     nextWestBackdrop =
       nextWest &&
       !isTopPlan &&
-      activePreset !== 'balcony' &&
       cameraPos.x > APT.X0 - 2.5 &&
       cameraPos.z < APT.Z2 + 3.0;
 
@@ -2296,8 +2399,9 @@ export function buildApartmentShell(
   };
 
   const setLightingMode = (mode: LightingMode) => {
+    westLightingMode = mode;
     southFacade.setLightingMode(mode);
-    westStreetMat.color.setHex(mode === 'daylight' ? 0xf6f6f4 : 0x887d76);
+    applyWestTint();
   };
 
   return {
@@ -2311,7 +2415,7 @@ export function buildApartmentShell(
     dispose: () => {
       isDisposed = true;
       southFacade.dispose();
-      westStreetTex.dispose();
+      westStreetTex?.dispose();
       westStreetMat.dispose();
       floorFinishCache.forEach(({ mat, maps }) => {
         maps.forEach((t) => t.dispose());

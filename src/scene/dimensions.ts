@@ -123,14 +123,14 @@ export const ROOM = {
   NICHE_DEPTH: 0.14,
 
   SHOWER_X0: 0.68,
-  SHOWER_X1: 1.69, // 1.01 m walk-in shower zone (red 900+ clear)
-  DRAIN_X0: 0.78,
-  DRAIN_X1: 1.58,
+  SHOWER_X1: 1.49, // 0.81 m walk-in shower zone (68 + 81 + 105 sink wall + 22 ledge = 276 cm)
+  DRAIN_X0: 0.74,
+  DRAIN_X1: 1.43,
   DRAIN_Z: 0.09,
   DRAIN_W: 0.065,
 
-  COL_X0: 1.69, // 2.76 - 1.69 = 1.07 m (red 1070 mm protruding Terrazzo wall)
-  COL_X1: 2.18,
+  COL_X0: 1.49, // Exposed Terrazzo sink wall to toilet installation (LEDGE_X 2.54 - 1.49 = exact 1.05 m = 105 cm!)
+  COL_X1: 2.01,
   COL_Z: 0.275, // 1.64 - 0.275 = 1.365 m clear width (red 1365 mm)
 
   LEDGE_DEPTH: 0.22,
