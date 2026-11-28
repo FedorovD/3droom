@@ -88,7 +88,7 @@ export interface VrHandInstance {
   setHandedness: (handedness: 'left' | 'right') => void;
   setPose: (trigger: number, grip: number, aimingTeleport: boolean, dt: number) => void;
   setWristInfo: (roomName: string, heightCm: number) => void;
-  setWristFps: (fps: number) => void;
+  setWristFps: (fps: number, hz: number) => void;
   dispose: () => void;
 }
 
@@ -284,6 +284,7 @@ export function createVrHandController(
   let lastRoomText = 'Гостиная';
   let lastHeightCm: number = DEFAULT_AVATAR_HEIGHT_CM;
   let lastFps = -1;
+  let lastHz = 0;
 
   const drawWristFrame = () => {
     if (!wristCtx) return;
@@ -319,10 +320,10 @@ export function createVrHandController(
     wristCtx.fillStyle = '#9cb8a4';
     wristCtx.font = '600 20px system-ui, -apple-system, sans-serif';
     wristCtx.textBaseline = 'top';
-    wristCtx.fillText('VR · КАДРЫ', 16, 14);
+    wristCtx.fillText(`VR · ${lastHz || '—'} Гц`, 16, 14);
 
     const statusColor =
-      fps <= 0 ? '#7c8680' : fps >= 60 ? '#9cb8a4' : fps >= 40 ? '#e4b468' : '#e08e8e';
+      fps <= 0 ? '#7c8680' : fps >= (lastHz || 90) - 2 ? '#9cb8a4' : fps >= 40 ? '#e4b468' : '#e08e8e';
     wristCtx.fillStyle = statusColor;
     wristCtx.beginPath();
     wristCtx.arc(24, 67, 6, 0, Math.PI * 2);
@@ -391,9 +392,10 @@ export function createVrHandController(
         drawWristDisplay(roomName, heightCm);
       }
     },
-    setWristFps: (fps) => {
+    setWristFps: (fps, hz) => {
       const rounded = fps > 0 ? Math.round(fps) : -1;
-      if (rounded === lastFps) return;
+      if (rounded === lastFps && hz === lastHz) return;
+      lastHz = hz;
       lastFps = rounded;
       if (currentHandedness === 'right') {
         drawWristFpsDisplay(rounded);

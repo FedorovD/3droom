@@ -791,8 +791,18 @@ export function BathroomViewport({
       pointerId: null as number | null,
     };
 
+    const xrOptions = new URLSearchParams(window.location.search);
+    const xrScale = xrOptions.get('xrScale') === '0.8' ? 0.8 : 1;
+    const xrStats = xrOptions.get('xrStats') === '1';
+    let lastXrStatsMs = 0;
+    const xrPointLights = xrOptions.get('xrLights') !== 'off';
+    type RateAwareSession = XRSession & {
+      frameRate?: number;
+      supportedFrameRates?: Float32Array;
+      updateTargetFrameRate?: (rate: number) => Promise<void>;
+    };
     let xrPresenting = false;
-    let activeXrSession: XRSession | null = null;
+    let activeXrSession: RateAwareSession | null = null;
     let xrHasLocalHeadPose = false;
     let xrNeedsInitialAlign = false;
     let xrTeleportValid = false;
@@ -813,12 +823,19 @@ export function BathroomViewport({
     let fpsFrameCount = 0;
     let fpsHasRealCadence = false;
     let lastDisplayedFps = -1;
+    const resetFrameFps = () => {
+      fpsLastFrameMs = 0;
+      fpsAccumMs = 0;
+      fpsFrameCount = 0;
+      fpsHasRealCadence = false;
+      lastDisplayedFps = -1;
+    };
     const recordFrameFps = (frameNow: number, drawStartMs: number) => {
       const el = fpsTextRef.current;
       const gap = fpsLastFrameMs > 0 ? frameNow - fpsLastFrameMs : 0;
       fpsLastFrameMs = frameNow;
 
-      if (gap > 1 && gap < 250) {
+      if (gap > 1 && (xrPresenting || gap < 250)) {
         fpsAccumMs += gap;
         fpsFrameCount += 1;
         if (fpsAccumMs >= 250) {
@@ -834,7 +851,7 @@ export function BathroomViewport({
       } else {
         fpsAccumMs = 0;
         fpsFrameCount = 0;
-        if (!fpsHasRealCadence) {
+        if (!xrPresenting && !fpsHasRealCadence) {
           const drawMs = Math.max(16.67, performance.now() - drawStartMs);
           const est = Math.max(1, Math.min(60, Math.round(1000 / drawMs)));
           if (est !== lastDisplayedFps) {
@@ -1720,17 +1737,6 @@ export function BathroomViewport({
             _xrArcPrev.copy(_xrArcCurr);
           }
 
-          // Clamp trailing vertices onto the final impact point so the line renders cleanly
-          const endX = vrArcPositions[arcEndIdx * 3];
-          const endY = vrArcPositions[arcEndIdx * 3 + 1];
-          const endZ = vrArcPositions[arcEndIdx * 3 + 2];
-          for (let s = arcEndIdx + 1; s <= VR_ARC_SEGMENTS; s++) {
-            vrArcPositions[s * 3] = endX;
-            vrArcPositions[s * 3 + 1] = endY;
-            vrArcPositions[s * 3 + 2] = endZ;
-          }
-          vrArcPosAttr.needsUpdate = true;
-
           if (hitSomething && !blockedByWall) {
             const distFromHead = Math.hypot(hitX - _xrHeadPos.x, hitZ - _xrHeadPos.z);
             if (distFromHead > 0.18 && distFromHead < 9.5 && isInsideApartment(hitX, hitZ)) {
@@ -1756,6 +1762,8 @@ export function BathroomViewport({
           // subtle aiming dot when pointing at valid floor while browsing
           const showFullTeleportUi = xrTeleportArmed || previewingTeleport;
           if (showFullTeleportUi) {
+            vrTeleportArcGeo.setDrawRange(0, arcEndIdx + 1);
+            vrArcPosAttr.needsUpdate = true;
             const colorHex = xrTeleportValid ? VR_COLOR_VALID : VR_COLOR_INVALID;
             vrTeleportArcMat.color.setHex(colorHex);
             vrTeleportArcMat.opacity = xrTeleportValid ? 0.92 : 0.65;
@@ -1809,7 +1817,7 @@ export function BathroomViewport({
           if (isLeft) {
             xrHands[c].setWristInfo(activeRoomName, avatarHeightCmRef.current);
           } else {
-            xrHands[c].setWristFps(lastDisplayedFps);
+            xrHands[c].setWristFps(lastDisplayedFps, activeXrSession?.frameRate ?? 0);
           }
         }
       }
@@ -1832,6 +1840,15 @@ export function BathroomViewport({
       const xrDrawStart = performance.now();
       renderer.render(bathroom.scene, camera);
       recordFrameFps(now, xrDrawStart);
+      if (xrStats && now - lastXrStatsMs >= 1000) {
+        lastXrStatsMs = now;
+        const { calls, triangles } = renderer.info.render;
+        console.info('[WebXR]', {
+          room: getRoomNameAt(_xrHeadPos.x, _xrHeadPos.z),
+          hz: activeXrSession?.frameRate, fps: lastDisplayedFps, calls, triangles,
+          framebufferScale: xrScale, pointLights: xrPointLights, doorMoved,
+        });
+      }
     };
 
     const enterWebXR = async (): Promise<boolean> => {
@@ -1848,7 +1865,7 @@ export function BathroomViewport({
         if (activeXrSession) return true;
 
         let useFloorSpace = true;
-        let session: XRSession;
+        let session: RateAwareSession;
         try {
           session = await nav.xr.requestSession('immersive-vr', {
             optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
@@ -1875,6 +1892,7 @@ export function BathroomViewport({
         controls.enabled = false;
 
         renderer.xr.enabled = true;
+        renderer.xr.setFramebufferScaleFactor(xrScale);
         renderer.xr.setReferenceSpaceType(useFloorSpace ? 'local-floor' : 'local');
 
         const safe = resolveWalkCollision(panoState.x, panoState.z);
@@ -1892,6 +1910,8 @@ export function BathroomViewport({
 
         session.addEventListener('end', () => {
           xrPresenting = false;
+          resetFrameFps();
+          bathroom.setPointLightsEnabled(true);
           activeXrSession = null;
           xrHasLocalHeadPose = false;
           xrNeedsInitialAlign = false;
@@ -1931,6 +1951,14 @@ export function BathroomViewport({
         });
 
         await renderer.xr.setSession(session);
+        if (activeXrSession !== session) return false;
+        resetFrameFps();
+        bathroom.setPointLightsEnabled(xrPointLights);
+        if (session.supportedFrameRates?.includes(90) && session.updateTargetFrameRate) {
+          void session.updateTargetFrameRate(90).catch((err) => {
+            console.warn('XR refresh rate request failed:', err);
+          });
+        }
         onXrSessionRef.current(true);
         renderer.setAnimationLoop(xrRenderFrame);
         return true;

@@ -35,6 +35,7 @@ import { createMaterialLibrary, MaterialLibrary } from './textures';
 export interface BathroomSceneController {
   scene: THREE.Scene;
   materials: MaterialLibrary;
+  setPointLightsEnabled: (enabled: boolean) => void;
   setLightingMode: (mode: LightingMode) => void;
   setFloorFinish: (finishId: FloorFinishId) => void;
   setDesignConfig: (config: DesignConfig) => void;
@@ -638,6 +639,16 @@ export function buildBathroomScene(
   // STATE CONTROLLERS
   // =========================================================================
 
+  const pointLights = [
+    bathroomLight, livingHallLight, bedroomLight, kitchenLight, entryLight,
+    livingAccentLight, diningPendantLight, bedroomAccentLight,
+  ];
+  let pointLightsEnabled = true;
+  const setPointLightsEnabled = (enabled: boolean) => {
+    pointLightsEnabled = enabled;
+    for (const light of pointLights) light.visible = enabled && light.intensity > 0;
+  };
+
   const setLightingMode = (mode: LightingMode) => {
     const bg = scene.background as THREE.Color;
     if (mode === 'daylight') {
@@ -746,6 +757,7 @@ export function buildBathroomScene(
       bg.setHex(0x0c0e11);
       (scene.fog as THREE.FogExp2).color.setHex(0x0c0e11);
     }
+    setPointLightsEnabled(pointLightsEnabled);
     apartmentShell.setLightingMode(mode);
   };
 
@@ -866,6 +878,7 @@ export function buildBathroomScene(
     scene,
     materials: mats,
     setLightingMode,
+    setPointLightsEnabled,
     setFloorFinish: apartmentShell.setFloorFinish,
     setDesignConfig: apartmentShell.setDesignConfig,
     setDimensionMode,
