@@ -45,7 +45,6 @@ import {
   getInitialWalkPose,
   getRoomNameAt,
   isInsideApartment,
-  PLAYER_EYE_HEIGHT,
   resolveWalkCollision,
   WALK_COLLIDERS,
 } from '../scene/walkCollision';
@@ -63,6 +62,15 @@ import {
   VR_VIEWPOINTS,
   VrViewpointId,
 } from '../scene/vrPanorama';
+import {
+  AvatarHeightCm,
+  createScaleHumanAvatar,
+  createVrFootprintIndicator,
+  createVrHandController,
+  getAvatarEyeHeightM,
+} from '../scene/vrAvatar';
+
+const SCALE_AVATAR_ID = 'vr_scale_avatar';
 
 export interface VrViewportActions {
   startGyroFromGesture: (viewpointId?: VrViewpointId) => Promise<void>;
@@ -111,6 +119,10 @@ interface BathroomViewportProps {
   onXrSessionChange: (active: boolean) => void;
   onVrViewpointChange: (id: VrViewpointId) => void;
   vrActionsRef?: MutableRefObject<VrViewportActions | null>;
+  avatarVisible: boolean;
+  avatarHeightCm: AvatarHeightCm;
+  placeAvatarTrigger: number;
+  onHideAvatar: () => void;
 }
 
 // Module-scope reusable math helpers (zero GC inside render loop)
@@ -235,9 +247,14 @@ export function BathroomViewport({
   onXrSessionChange,
   onVrViewpointChange,
   vrActionsRef,
+  avatarVisible,
+  avatarHeightCm,
+  placeAvatarTrigger,
+  onHideAvatar,
 }: BathroomViewportProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  const fpsTextRef = useRef<HTMLSpanElement | null>(null);
   const [webglError, setWebglError] = useState(false);
 
   // Double-click selected object state, move mode & replace picker
@@ -248,6 +265,7 @@ export function BathroomViewport({
   const [isDraggingObj, setIsDraggingObj] = useState(false);
   const [rotInputValue, setRotInputValue] = useState('0');
   const [isEditingRot, setIsEditingRot] = useState(false);
+  const [avatarRotY, setAvatarRotY] = useState(0);
   const skipRotBlurCommitRef = useRef(false);
 
   // Mutable refs so React state updates never recreate the WebGL context
@@ -283,6 +301,17 @@ export function BathroomViewport({
   const syncVrPanoModeRef = useRef<((enabled: boolean) => void) | null>(null);
   const moveVrViewpointRef = useRef<((id: VrViewpointId) => void) | null>(null);
   const recenterVrRef = useRef<(() => void) | null>(null);
+  const avatarVisibleRef = useRef<boolean>(avatarVisible);
+  const avatarHeightCmRef = useRef<AvatarHeightCm>(avatarHeightCm);
+  const onHideAvatarRef = useRef(onHideAvatar);
+  const avatarPoseRef = useRef<{ x: number; z: number; rotY: number; placed: boolean }>({
+    x: 5.35,
+    z: 3.85,
+    rotY: 0,
+    placed: false,
+  });
+  const syncAvatarStateRef = useRef<(() => void) | null>(null);
+  const placeAvatarBeforeViewRef = useRef<(() => void) | null>(null);
 
   const transitionRef = useRef<{
     active: boolean;
@@ -335,6 +364,27 @@ export function BathroomViewport({
   useEffect(() => {
     onVrViewpointChangeRef.current = onVrViewpointChange;
   }, [onVrViewpointChange]);
+
+  useEffect(() => {
+    onHideAvatarRef.current = onHideAvatar;
+  }, [onHideAvatar]);
+
+  useEffect(() => {
+    const prevVisible = avatarVisibleRef.current;
+    avatarVisibleRef.current = avatarVisible;
+    avatarHeightCmRef.current = avatarHeightCm;
+    if (avatarVisible && !prevVisible && !avatarPoseRef.current.placed) {
+      placeAvatarBeforeViewRef.current?.();
+    } else {
+      syncAvatarStateRef.current?.();
+    }
+  }, [avatarVisible, avatarHeightCm]);
+
+  useEffect(() => {
+    if (placeAvatarTrigger > 0) {
+      placeAvatarBeforeViewRef.current?.();
+    }
+  }, [placeAvatarTrigger]);
 
   useEffect(() => {
     selectedIdRef.current = selectedObj?.id ?? null;
@@ -620,17 +670,43 @@ export function BathroomViewport({
       transparent: true,
       opacity: 0.42,
     });
+    const maxAniso = renderer.capabilities.getMaxAnisotropy();
     const xrControllers = [renderer.xr.getController(0), renderer.xr.getController(1)];
     const xrCtrlHandedness: Array<'left' | 'right' | 'none' | null> = [null, null];
-    const xrControllerLines = xrControllers.map((ctrl) => {
+    const xrHands = [
+      createVrHandController('left', maxAniso),
+      createVrHandController('right', maxAniso),
+    ];
+    const xrControllerLines = xrControllers.map((ctrl, idx) => {
       const line = new THREE.Line(vrRayGeo, vrRayMat);
       line.name = 'VRControllerTip';
       line.visible = false;
       line.userData.ignoreRaycast = true;
       ctrl.add(line);
+
+      xrHands[idx].group.visible = false;
+      ctrl.add(xrHands[idx].group);
+
       vrRig.add(ctrl);
       return line;
     });
+
+    // Subtle VR floor clearance ring beneath the user's head during Quest 2 sessions
+    const vrFootprint = createVrFootprintIndicator();
+    bathroom.scene.add(vrFootprint.group);
+
+    // Architectural Scale Human Avatar ("Гость / Масштабная фигура") toggleable in 3D & VR
+    const scaleAvatar = createScaleHumanAvatar(avatarHeightCmRef.current);
+    scaleAvatar.group.userData.editableId = SCALE_AVATAR_ID;
+    scaleAvatar.group.userData.editableLabel = 'Аватар (масштаб)';
+    scaleAvatar.group.userData.editableAxes = 'xz';
+    scaleAvatar.group.userData.editableType = 'decor';
+    scaleAvatar.group.position.set(avatarPoseRef.current.x, 0, avatarPoseRef.current.z);
+    scaleAvatar.group.rotation.y = THREE.MathUtils.degToRad(avatarPoseRef.current.rotY);
+    scaleAvatar.group.visible = avatarVisibleRef.current;
+    bathroom.scene.add(scaleAvatar.group);
+
+    const getEyeHeight = (): number => getAvatarEyeHeightM(avatarHeightCmRef.current);
 
     // Mandatory Studio PBR Environment Map via RoomEnvironment + PMREMGenerator
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
@@ -679,7 +755,7 @@ export function BathroomViewport({
     const walkState = {
       x: savedWalkSafe ? savedWalkSafe.x : 7.42,
       z: savedWalkSafe ? savedWalkSafe.z : 2.15,
-      eyeY: PLAYER_EYE_HEIGHT,
+      eyeY: getEyeHeight(),
       yaw: savedCam.walk?.yaw ?? 0,
       pitch: savedCam.walk?.pitch ?? 0,
       targetYaw: savedCam.walk?.yaw ?? 0,
@@ -730,6 +806,45 @@ export function BathroomViewport({
     let xrActiveAimCtrl = 1;
     let xrLastRoom = '';
     let xrLastTime = performance.now();
+
+    // Lightweight zero-GC FPS tracker (measures real active cadence in both desktop & WebXR loops)
+    let fpsLastFrameMs = 0;
+    let fpsAccumMs = 0;
+    let fpsFrameCount = 0;
+    let fpsHasRealCadence = false;
+    let lastDisplayedFps = -1;
+    const recordFrameFps = (frameNow: number, drawStartMs: number) => {
+      const el = fpsTextRef.current;
+      if (!el) return;
+      const gap = fpsLastFrameMs > 0 ? frameNow - fpsLastFrameMs : 0;
+      fpsLastFrameMs = frameNow;
+
+      if (gap > 1 && gap < 250) {
+        fpsAccumMs += gap;
+        fpsFrameCount += 1;
+        if (fpsAccumMs >= 250) {
+          const measured = Math.max(1, Math.min(240, Math.round((fpsFrameCount * 1000) / fpsAccumMs)));
+          fpsAccumMs = 0;
+          fpsFrameCount = 0;
+          fpsHasRealCadence = true;
+          if (measured !== lastDisplayedFps) {
+            lastDisplayedFps = measured;
+            el.textContent = `${measured} FPS`;
+          }
+        }
+      } else {
+        fpsAccumMs = 0;
+        fpsFrameCount = 0;
+        if (!fpsHasRealCadence) {
+          const drawMs = Math.max(16.67, performance.now() - drawStartMs);
+          const est = Math.max(1, Math.min(60, Math.round(1000 / drawMs)));
+          if (est !== lastDisplayedFps) {
+            lastDisplayedFps = est;
+            el.textContent = `${est} FPS`;
+          }
+        }
+      }
+    };
 
     const gyroController = new GyroPanoramaController({
       onStatusChange: (status) => {
@@ -900,6 +1015,109 @@ export function BathroomViewport({
       };
     }
 
+    const syncAvatarState = () => {
+      const visible = avatarVisibleRef.current;
+      scaleAvatar.setHeightCm(avatarHeightCmRef.current);
+      scaleAvatar.group.visible = visible;
+      scaleAvatar.group.position.set(avatarPoseRef.current.x, 0, avatarPoseRef.current.z);
+      scaleAvatar.group.rotation.y = THREE.MathUtils.degToRad(avatarPoseRef.current.rotY);
+      scaleAvatar.group.updateMatrixWorld(true);
+
+      const currentEyeY = getEyeHeight();
+      const roomForWrist = getRoomNameAt(panoState.x, panoState.z);
+      xrHands[0].setWristInfo(roomForWrist, avatarHeightCmRef.current);
+      xrHands[1].setWristInfo(roomForWrist, avatarHeightCmRef.current);
+
+      if (vrPanoModeRef.current && !xrPresenting) {
+        camera.position.y = currentEyeY;
+      } else if (walkModeRef.current) {
+        walkState.eyeY = currentEyeY;
+        camera.position.y = currentEyeY;
+      }
+
+      if (!visible && selectedIdRef.current === SCALE_AVATAR_ID) {
+        selectedIdRef.current = null;
+        setSelectedObj(null);
+        setMoveMode(false);
+      }
+      syncSelectionHighlightRef.current?.();
+      shadowDirtyRef.current = true;
+      requestRender();
+    };
+    syncAvatarStateRef.current = syncAvatarState;
+
+    const placeAvatarBeforeView = () => {
+      camera.updateMatrixWorld(true);
+      const camPos = camera.position;
+      camera.getWorldDirection(_camDir);
+      let dirX = _camDir.x;
+      let dirZ = _camDir.z;
+      const dirLen = Math.hypot(dirX, dirZ);
+      if (dirLen < 1e-4) {
+        dirX = 0;
+        dirZ = -1;
+      } else {
+        dirX /= dirLen;
+        dirZ /= dirLen;
+      }
+
+      let sx = 5.35;
+      let sz = 3.85;
+      if (walkModeRef.current || vrPanoModeRef.current || xrPresenting) {
+        const originX = xrPresenting ? _xrHeadPos.x : camPos.x;
+        const originZ = xrPresenting ? _xrHeadPos.z : camPos.z;
+        sx = originX + dirX * 1.55;
+        sz = originZ + dirZ * 1.55;
+      } else {
+        let usedFloorHit = false;
+        if (_camDir.y < -0.08 && camPos.y > 0.15) {
+          const tFloor = -camPos.y / _camDir.y;
+          if (tFloor >= 1.1 && tFloor <= 6.2) {
+            const hx = camPos.x + _camDir.x * tFloor;
+            const hz = camPos.z + _camDir.z * tFloor;
+            if (hx >= 0.5 && hx <= 10.2 && hz >= 0.5 && hz <= 8.1) {
+              sx = hx;
+              sz = hz;
+              usedFloorHit = true;
+            }
+          }
+        }
+        if (!usedFloorHit) {
+          const distToTarget = Math.hypot(
+            controls.target.x - camPos.x,
+            controls.target.z - camPos.z
+          );
+          if (distToTarget >= 0.8 && distToTarget <= 5.5) {
+            sx = controls.target.x;
+            sz = controls.target.z;
+          } else {
+            sx = camPos.x + dirX * 2.1;
+            sz = camPos.z + dirZ * 2.1;
+          }
+        }
+      }
+
+      const safe = resolveWalkCollision(
+        THREE.MathUtils.clamp(sx, 0.72, 9.95),
+        THREE.MathUtils.clamp(sz, 0.72, 7.9)
+      );
+      const lookFromX = xrPresenting ? _xrHeadPos.x : camPos.x;
+      const lookFromZ = xrPresenting ? _xrHeadPos.z : camPos.z;
+      const faceYawRad = Math.atan2(lookFromX - safe.x, lookFromZ - safe.z);
+      const snappedDeg = Math.round(((faceYawRad * 180) / Math.PI) / 5) * 5;
+      const rotY = normalizeRotationDeg(snappedDeg === 0 ? 0 : snappedDeg);
+
+      avatarPoseRef.current = {
+        x: Number(safe.x.toFixed(3)),
+        z: Number(safe.z.toFixed(3)),
+        rotY,
+        placed: true,
+      };
+      setAvatarRotY(rotY);
+      syncAvatarState();
+    };
+    placeAvatarBeforeViewRef.current = placeAvatarBeforeView;
+
     if (focusPlacedObjectRef) {
       focusPlacedObjectRef.current = (objectId: string) => {
         requestAnimationFrame(() => {
@@ -943,7 +1161,7 @@ export function BathroomViewport({
           const safe = resolveWalkCollision(cam.walk.x, cam.walk.z);
           walkState.x = safe.x;
           walkState.z = safe.z;
-          walkState.eyeY = PLAYER_EYE_HEIGHT;
+          walkState.eyeY = getEyeHeight();
           walkState.yaw = cam.walk.yaw;
           walkState.targetYaw = cam.walk.yaw;
           walkState.pitch = cam.walk.pitch;
@@ -1029,7 +1247,7 @@ export function BathroomViewport({
         );
         walkState.x = pose.x;
         walkState.z = pose.z;
-        walkState.eyeY = PLAYER_EYE_HEIGHT;
+        walkState.eyeY = getEyeHeight();
         walkState.yaw = pose.yaw;
         walkState.targetYaw = pose.yaw;
         walkState.pitch = pose.pitch;
@@ -1068,7 +1286,7 @@ export function BathroomViewport({
         _xrHeadPos.copy(_xrLocalHeadPos).applyMatrix4(vrRig.matrixWorld);
         _xrHeadQuat.copy(vrRig.quaternion).multiply(_xrLocalHeadQuat);
       } else {
-        _xrHeadPos.set(vrRig.position.x, PLAYER_EYE_HEIGHT, vrRig.position.z);
+        _xrHeadPos.set(vrRig.position.x, getEyeHeight(), vrRig.position.z);
         _xrHeadQuat.copy(vrRig.quaternion);
       }
     };
@@ -1114,7 +1332,7 @@ export function BathroomViewport({
       if (xrPresenting) {
         teleportXrHeadTo(safe.x, safe.z, vp.initialYaw);
       } else if (vrPanoModeRef.current) {
-        camera.position.set(safe.x, PLAYER_EYE_HEIGHT, safe.z);
+        camera.position.set(safe.x, getEyeHeight(), safe.z);
         gyroController.recenter(vp.initialYaw);
         onRoomChangeRef.current(getRoomNameAt(safe.x, safe.z));
       } else {
@@ -1153,7 +1371,7 @@ export function BathroomViewport({
         panoState.z = safe.z;
         panoState.yaw = vp.initialYaw;
 
-        camera.position.set(safe.x, PLAYER_EYE_HEIGHT, safe.z);
+        camera.position.set(safe.x, getEyeHeight(), safe.z);
         camera.fov = 72;
         camera.updateProjectionMatrix();
 
@@ -1188,11 +1406,14 @@ export function BathroomViewport({
       if (hand === 'right' || xrCtrlHandedness[xrActiveAimCtrl] !== 'right') {
         xrActiveAimCtrl = ctrlIdx;
       }
+      xrHands[ctrlIdx].setHandedness(hand === 'left' ? 'left' : 'right');
+      xrHands[ctrlIdx].group.visible = xrPresenting;
       xrControllerLines[ctrlIdx].visible = xrPresenting;
     };
 
     const handleXrDisconnected = (ctrlIdx: number) => () => {
       xrCtrlHandedness[ctrlIdx] = null;
+      xrHands[ctrlIdx].group.visible = false;
       xrControllerLines[ctrlIdx].visible = false;
       if (xrActiveAimCtrl === ctrlIdx) {
         const other = ctrlIdx === 0 ? 1 : 0;
@@ -1259,6 +1480,10 @@ export function BathroomViewport({
         let leftY = 0;
         let rightX = 0;
         let rightY = 0;
+        let leftTrigger = 0;
+        let leftGrip = 0;
+        let rightTrigger = 0;
+        let rightGrip = 0;
         let hasRightController = false;
         let cyclePressed = false;
         let aimInputSource: XRInputSource | null = null;
@@ -1279,16 +1504,24 @@ export function BathroomViewport({
           // Quest 2 Touch thumbsticks map to axes[2] (X) and axes[3] (Y)
           const axX = gp.axes.length >= 4 ? gp.axes[2] : gp.axes[0] ?? 0;
           const axY = gp.axes.length >= 4 ? gp.axes[3] : gp.axes[1] ?? 0;
+          const trigVal = gp.buttons[0]?.value ?? (gp.buttons[0]?.pressed ? 1 : 0);
+          const gripVal = gp.buttons[1]?.value ?? (gp.buttons[1]?.pressed ? 1 : 0);
 
           if (src.handedness === 'left') {
             leftX = axX;
             leftY = axY;
+            leftTrigger = trigVal;
+            leftGrip = gripVal;
           } else if (src.handedness === 'right') {
             rightX = axX;
             rightY = axY;
+            rightTrigger = trigVal;
+            rightGrip = gripVal;
           } else if (!hasRightController) {
             leftX = axX;
             leftY = axY;
+            leftTrigger = trigVal;
+            leftGrip = gripVal;
           }
 
           // Button A / X (index 4 on Quest 2 Touch) cycles apartment room viewpoints
@@ -1556,6 +1789,36 @@ export function BathroomViewport({
           vrTeleportArc.visible = false;
           vrTeleportMarker.visible = false;
         }
+
+        // 6. Animate stylized VR hands (finger curl on trigger/grip, pointer when aiming teleport)
+        const activeRoomName = xrLastRoom || getRoomNameAt(_xrHeadPos.x, _xrHeadPos.z);
+        for (let c = 0; c < 2; c++) {
+          const hand = xrCtrlHandedness[c];
+          const isConnected = hand !== null;
+          xrHands[c].group.visible = isConnected;
+          if (!isConnected) continue;
+          const isLeft = hand === 'left';
+          const isAimHand =
+            (xrTeleportArmed || previewingTeleport) &&
+            (hand === 'right' || (xrCtrlHandedness[0] !== 'right' && xrCtrlHandedness[1] !== 'right' && c === xrActiveAimCtrl));
+          xrHands[c].setPose(
+            isLeft ? leftTrigger : rightTrigger,
+            isLeft ? leftGrip : rightGrip,
+            isAimHand,
+            dt
+          );
+          if (isLeft) {
+            xrHands[c].setWristInfo(activeRoomName, avatarHeightCmRef.current);
+          }
+        }
+      }
+
+      // 7. Keep personal VR floor clearance ring aligned directly under headset gaze
+      vrFootprint.group.visible = true;
+      vrFootprint.group.position.set(_xrHeadPos.x, 0, _xrHeadPos.z);
+      _xrForward.set(0, 0, -1).applyQuaternion(_xrHeadQuat);
+      if (Math.hypot(_xrForward.x, _xrForward.z) > 1e-4) {
+        vrFootprint.group.rotation.y = Math.atan2(-_xrForward.x, -_xrForward.z);
       }
 
       const doorMoved = bathroom.updateBalconyDoor(true, _xrHeadPos, dt, false);
@@ -1565,7 +1828,9 @@ export function BathroomViewport({
         shadowDirtyRef.current = false;
       }
 
+      const xrDrawStart = performance.now();
       renderer.render(bathroom.scene, camera);
+      recordFrameFps(now, xrDrawStart);
     };
 
     const enterWebXR = async (): Promise<boolean> => {
@@ -1614,12 +1879,15 @@ export function BathroomViewport({
         const safe = resolveWalkCollision(panoState.x, panoState.z);
         panoState.x = safe.x;
         panoState.z = safe.z;
-        vrRig.position.set(safe.x, useFloorSpace ? 0 : PLAYER_EYE_HEIGHT, safe.z);
+        vrRig.position.set(safe.x, useFloorSpace ? 0 : getEyeHeight(), safe.z);
         vrRig.rotation.set(0, panoState.yaw, 0);
         vrRig.add(camera);
         camera.position.set(0, 0, 0);
         camera.rotation.set(0, 0, 0);
         vrRig.updateMatrixWorld(true);
+        vrFootprint.group.visible = true;
+        xrHands[0].group.visible = xrCtrlHandedness[0] !== null;
+        xrHands[1].group.visible = xrCtrlHandedness[1] !== null;
 
         session.addEventListener('end', () => {
           xrPresenting = false;
@@ -1632,15 +1900,18 @@ export function BathroomViewport({
           xrWalkVz = 0;
           vrTeleportArc.visible = false;
           vrTeleportMarker.visible = false;
+          vrFootprint.group.visible = false;
           xrControllerLines[0].visible = false;
           xrControllerLines[1].visible = false;
+          xrHands[0].group.visible = false;
+          xrHands[1].group.visible = false;
           renderer.setAnimationLoop(null);
           renderer.xr.enabled = false;
 
           // Restore camera back into root scene at final VR world position
           bathroom.scene.add(camera);
           const finalPos = resolveWalkCollision(panoState.x, panoState.z);
-          camera.position.set(finalPos.x, PLAYER_EYE_HEIGHT, finalPos.z);
+          camera.position.set(finalPos.x, getEyeHeight(), finalPos.z);
           camera.aspect =
             (container.clientWidth || window.innerWidth) /
             (container.clientHeight || window.innerHeight);
@@ -1738,6 +2009,9 @@ export function BathroomViewport({
     // --- Interactive Double-Click Object Selection, Dragging & Screen-Space Popover ---
     const getActiveEditableObject = (id: string | null): THREE.Object3D | null => {
       if (!id) return null;
+      if (id === SCALE_AVATAR_ID) {
+        return scaleAvatar.group.visible ? scaleAvatar.group : null;
+      }
       const list = bathroom.getEditableObjects(id);
       for (const obj of list) {
         if (isEffectivelyVisible(obj)) return obj;
@@ -1746,17 +2020,24 @@ export function BathroomViewport({
     };
 
     const getObjectDimsForId = (id: string): [number, number, number] | undefined => {
+      if (id === SCALE_AVATAR_ID) return undefined;
       const variantId = objectEditsRef.current[id]?.variant;
       if (!variantId) return undefined;
       return getVariantById(variantId)?.dimensionsM;
     };
 
     const getCurrentOffsetForId = (id: string): [number, number, number] => {
+      if (id === SCALE_AVATAR_ID) {
+        return [avatarPoseRef.current.x, 0, avatarPoseRef.current.z];
+      }
       const off = objectEditsRef.current[id]?.offset;
       return off ? [off[0], off[1], off[2]] : [0, 0, 0];
     };
 
     const getCurrentRotYForId = (id: string): number => {
+      if (id === SCALE_AVATAR_ID) {
+        return avatarPoseRef.current.rotY;
+      }
       return objectEditsRef.current[id]?.rotY ?? 0;
     };
 
@@ -1766,6 +2047,16 @@ export function BathroomViewport({
       dy: number,
       dz: number
     ): [number, number, number] => {
+      if (id === SCALE_AVATAR_ID) {
+        const ax = THREE.MathUtils.clamp(dx, 0.55, 10.15);
+        const az = THREE.MathUtils.clamp(dz, 0.55, 8.1);
+        avatarPoseRef.current.x = Number(ax.toFixed(3));
+        avatarPoseRef.current.z = Number(az.toFixed(3));
+        avatarPoseRef.current.placed = true;
+        scaleAvatar.group.position.set(ax, 0, az);
+        scaleAvatar.group.updateMatrixWorld(true);
+        return [ax, 0, az];
+      }
       const clamped: [number, number, number] = [
         THREE.MathUtils.clamp(dx, -12, 12),
         THREE.MathUtils.clamp(dy, -2.4, 2.4),
@@ -1782,6 +2073,13 @@ export function BathroomViewport({
 
     const applyLiveRotationToId = (id: string, nextRotYDeg: number): number => {
       const normalized = normalizeRotationDeg(nextRotYDeg);
+      if (id === SCALE_AVATAR_ID) {
+        avatarPoseRef.current.rotY = normalized;
+        scaleAvatar.group.rotation.y = THREE.MathUtils.degToRad(normalized);
+        scaleAvatar.group.updateMatrixWorld(true);
+        setAvatarRotY(normalized);
+        return normalized;
+      }
       const offset =
         objDragState.active && objDragState.editableId === id
           ? objDragState.currentOffset
@@ -1912,7 +2210,9 @@ export function BathroomViewport({
       );
       syncSelectionHighlight();
       shadowDirtyRef.current = true;
-      onMoveObjectRef.current(id, nextOffset);
+      if (id !== SCALE_AVATAR_ID) {
+        onMoveObjectRef.current(id, nextOffset);
+      }
       requestRender();
     };
 
@@ -1923,7 +2223,9 @@ export function BathroomViewport({
       const nextRot = applyLiveRotationToId(id, getCurrentRotYForId(id) + deltaDeg);
       syncSelectionHighlight();
       shadowDirtyRef.current = true;
-      onRotateObjectRef.current(id, nextRot);
+      if (id !== SCALE_AVATAR_ID) {
+        onRotateObjectRef.current(id, nextRot);
+      }
       requestRender();
     };
 
@@ -1934,7 +2236,9 @@ export function BathroomViewport({
       const nextRot = applyLiveRotationToId(id, targetDeg);
       syncSelectionHighlight();
       shadowDirtyRef.current = true;
-      onRotateObjectRef.current(id, nextRot);
+      if (id !== SCALE_AVATAR_ID) {
+        onRotateObjectRef.current(id, nextRot);
+      }
       requestRender();
     };
 
@@ -2126,7 +2430,9 @@ export function BathroomViewport({
       domEl.releasePointerCapture?.(e.pointerId);
       controls.enabled = !walkModeRef.current;
       setIsDraggingObj(false);
-      onMoveObjectRef.current(objDragState.editableId, [...objDragState.currentOffset]);
+      if (objDragState.editableId !== SCALE_AVATAR_ID) {
+        onMoveObjectRef.current(objDragState.editableId, [...objDragState.currentOffset]);
+      }
       requestRender();
     };
 
@@ -2139,7 +2445,9 @@ export function BathroomViewport({
         objDragState.pointerId = null;
         controls.enabled = !walkModeRef.current;
         setIsDraggingObj(false);
-        onMoveObjectRef.current(objDragState.editableId, [...objDragState.currentOffset]);
+        if (objDragState.editableId !== SCALE_AVATAR_ID) {
+          onMoveObjectRef.current(objDragState.editableId, [...objDragState.currentOffset]);
+        }
       }
     };
 
@@ -2429,7 +2737,7 @@ export function BathroomViewport({
         let needsMoreFrames = false;
 
         if (vrPanoModeRef.current) {
-          camera.position.set(panoState.x, PLAYER_EYE_HEIGHT, panoState.z);
+          camera.position.set(panoState.x, getEyeHeight(), panoState.z);
           const gyroSettling = gyroController.updateCamera(camera, dt, isSoftwareGl);
           if (gyroSettling) {
             needsMoreFrames = true;
@@ -2545,14 +2853,15 @@ export function BathroomViewport({
           }
 
           // Subtle natural eye-level walking cadence (only when moving on real GPU)
+          const walkBaseEyeY = getEyeHeight();
           if (!isSoftwareGl && actualSpeed > 0.18) {
             walkState.bobPhase += dt * Math.min(actualSpeed * 4.5, 11);
-            const targetEyeY = PLAYER_EYE_HEIGHT + Math.sin(walkState.bobPhase) * 0.015;
+            const targetEyeY = walkBaseEyeY + Math.sin(walkState.bobPhase) * 0.015;
             walkState.eyeY = THREE.MathUtils.damp(walkState.eyeY, targetEyeY, 12, dt);
           } else {
             walkState.eyeY = THREE.MathUtils.damp(
               walkState.eyeY,
-              PLAYER_EYE_HEIGHT,
+              walkBaseEyeY,
               10,
               dt
             );
@@ -2561,7 +2870,7 @@ export function BathroomViewport({
           const velMag = Math.hypot(walkState.vx, walkState.vz);
           if (
             velMag > 0.015 ||
-            Math.abs(walkState.eyeY - PLAYER_EYE_HEIGHT) > 0.001
+            Math.abs(walkState.eyeY - walkBaseEyeY) > 0.001
           ) {
             needsMoreFrames = true;
           }
@@ -2650,7 +2959,9 @@ export function BathroomViewport({
           shadowDirtyRef.current = false;
         }
 
+        const drawStart = performance.now();
         renderer.render(bathroom.scene, camera);
+        recordFrameFps(now, drawStart);
         updateOverlayPosition();
 
         const done = () => {
@@ -2781,6 +3092,10 @@ export function BathroomViewport({
       vrTeleportArcMat.dispose();
       vrRayGeo.dispose();
       vrRayMat.dispose();
+      xrHands[0].dispose();
+      xrHands[1].dispose();
+      vrFootprint.dispose();
+      scaleAvatar.dispose();
       selectionHelper.dispose();
       walkMarkerGeo.dispose();
       walkMarkerMat.dispose();
@@ -2797,6 +3112,8 @@ export function BathroomViewport({
       syncVrPanoModeRef.current = null;
       moveVrViewpointRef.current = null;
       recenterVrRef.current = null;
+      syncAvatarStateRef.current = null;
+      placeAvatarBeforeViewRef.current = null;
       if (captureCameraRef) captureCameraRef.current = null;
       if (applyCameraRef) applyCameraRef.current = null;
       if (getSpawnPoseRef) getSpawnPoseRef.current = null;
@@ -2819,7 +3136,11 @@ export function BathroomViewport({
 
   const handleDeleteSelected = useCallback(() => {
     if (!selectedObj) return;
-    onDeleteObjectRef.current(selectedObj.id);
+    if (selectedObj.id === SCALE_AVATAR_ID) {
+      onHideAvatarRef.current();
+    } else {
+      onDeleteObjectRef.current(selectedObj.id);
+    }
     setSelectedObj(null);
     setMoveMode(false);
     setReplaceOpen(false);
@@ -2879,10 +3200,17 @@ export function BathroomViewport({
     [selectedObj]
   );
 
-  const activeOffset = selectedObj ? objectEdits[selectedObj.id]?.offset : undefined;
-  const activeRotY = selectedObj ? (objectEdits[selectedObj.id]?.rotY ?? 0) : 0;
+  const isSelectedScaleAvatar = selectedObj?.id === SCALE_AVATAR_ID;
+  const activeOffset =
+    selectedObj && !isSelectedScaleAvatar ? objectEdits[selectedObj.id]?.offset : undefined;
+  const activeRotY = selectedObj
+    ? isSelectedScaleAvatar
+      ? avatarRotY
+      : (objectEdits[selectedObj.id]?.rotY ?? 0)
+    : 0;
   const displayRotY = Math.round(activeRotY) || 0;
-  const activeVariantId = selectedObj ? objectEdits[selectedObj.id]?.variant : undefined;
+  const activeVariantId =
+    selectedObj && !isSelectedScaleAvatar ? objectEdits[selectedObj.id]?.variant : undefined;
   const activeVariantSpec = getVariantById(activeVariantId);
   const hasMovedOffset = Boolean(
     activeOffset &&
@@ -2890,9 +3218,11 @@ export function BathroomViewport({
         Math.abs(activeOffset[1]) >= 0.001 ||
         Math.abs(activeOffset[2]) >= 0.001)
   );
-  const hasRotated = Math.abs(activeRotY) >= 0.05;
-  const hasAnyObjectEdit = hasMovedOffset || hasRotated || Boolean(activeVariantId);
-  const replacementOptions = selectedObj ? getVariantsForType(selectedObj.type) : [];
+  const hasRotated = !isSelectedScaleAvatar && Math.abs(activeRotY) >= 0.05;
+  const hasAnyObjectEdit =
+    !isSelectedScaleAvatar && (hasMovedOffset || hasRotated || Boolean(activeVariantId));
+  const replacementOptions =
+    selectedObj && !isSelectedScaleAvatar ? getVariantsForType(selectedObj.type) : [];
 
   useEffect(() => {
     setIsEditingRot(false);
@@ -2950,6 +3280,19 @@ export function BathroomViewport({
         }`}
       />
 
+      {/* Discreet Top-Left FPS Counter */}
+      <div
+        className="pointer-events-none fixed top-3 left-3 z-20 border border-white/10 bg-[#171918]/86 px-2 py-0.5 shadow-sm select-none sm:top-5 sm:left-5"
+        aria-label="Счётчик кадров в секунду"
+      >
+        <span
+          ref={fpsTextRef}
+          className="font-mono-nums text-[10px] font-medium tracking-tight text-[#b6c2ba]"
+        >
+          -- FPS
+        </span>
+      </div>
+
       {/* Screen-Anchored Floating Object Action Bar (Move / Replace / Reset / Delete) */}
       <div
         ref={overlayRef}
@@ -2990,11 +3333,13 @@ export function BathroomViewport({
                   {selectedObj.label}
                 </span>
                 <span className="shrink-0 border border-white/10 bg-[#202422] px-1.5 py-0.5 text-[9.5px] font-medium text-[#9eb2a4]">
-                  {isPlacedObjectId(selectedObj.id)
-                    ? selectedObj.typeLabel
-                    : activeVariantSpec
-                      ? activeVariantSpec.label
-                      : selectedObj.typeLabel}
+                  {isSelectedScaleAvatar
+                    ? `${avatarHeightCm} см`
+                    : isPlacedObjectId(selectedObj.id)
+                      ? selectedObj.typeLabel
+                      : activeVariantSpec
+                        ? activeVariantSpec.label
+                        : selectedObj.typeLabel}
                 </span>
               </div>
               <button

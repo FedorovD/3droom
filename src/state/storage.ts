@@ -19,6 +19,11 @@ import {
 } from '../scene/dimensions';
 import { ObjectEditsMap, ObjectEditState } from '../scene/editableObjects';
 import { migrateLegacyVariantId } from '../scene/objectCatalog';
+import {
+  AvatarHeightCm,
+  DEFAULT_AVATAR_HEIGHT_CM,
+  sanitizeAvatarHeightCm,
+} from '../scene/vrAvatar';
 
 const APP_STATE_KEY = 'brest_lenina36_3d_state_v1';
 const CAMERA_STATE_KEY = 'brest_lenina36_3d_camera_v1';
@@ -39,6 +44,8 @@ export interface PersistedAppState {
   activeTab: DesignTab;
   wallZoneTab: WallZoneTab;
   objectEdits: ObjectEditsMap;
+  avatarVisible: boolean;
+  avatarHeightCm: AvatarHeightCm;
 }
 
 export interface PersistedOrbitPose {
@@ -72,6 +79,8 @@ export const DEFAULT_APP_STATE: PersistedAppState = {
   activeTab: 'finishes',
   wallZoneTab: 'main',
   objectEdits: {},
+  avatarVisible: false,
+  avatarHeightCm: DEFAULT_AVATAR_HEIGHT_CM,
 };
 
 const VALID_PRESETS = new Set<string>(CAMERA_PRESETS.map((p) => p.id));
@@ -216,6 +225,14 @@ export function sanitizeAppState(
     activeTab: pickFromSet(parsed.activeTab, VALID_DESIGN_TABS, base.activeTab),
     wallZoneTab: pickFromSet(parsed.wallZoneTab, VALID_WALL_ZONE_TABS, base.wallZoneTab),
     objectEdits,
+    avatarVisible:
+      typeof parsed.avatarVisible === 'boolean'
+        ? parsed.avatarVisible
+        : base.avatarVisible,
+    avatarHeightCm:
+      parsed.avatarHeightCm !== undefined
+        ? sanitizeAvatarHeightCm(parsed.avatarHeightCm)
+        : base.avatarHeightCm,
   };
 }
 

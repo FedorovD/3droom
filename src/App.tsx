@@ -31,6 +31,7 @@ import {
   VariantShapeSpec,
 } from './scene/objectCatalog';
 import { GyroStatus, VrViewpointId } from './scene/vrPanorama';
+import { AvatarHeightCm } from './scene/vrAvatar';
 import {
   CustomCatalogItem,
   customItemsToVariantSpecs,
@@ -77,6 +78,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<DesignTab>(initialState.activeTab);
   const [wallZoneTab, setWallZoneTab] = useState<WallZoneTab>(initialState.wallZoneTab);
   const [objectEdits, setObjectEdits] = useState<ObjectEditsMap>(initialState.objectEdits);
+  const [avatarVisible, setAvatarVisible] = useState<boolean>(initialState.avatarVisible);
+  const [avatarHeightCm, setAvatarHeightCm] = useState<AvatarHeightCm>(initialState.avatarHeightCm);
+  const [placeAvatarTrigger, setPlaceAvatarTrigger] = useState(0);
 
   const captureCameraRef = useRef<(() => PersistedCameraState) | null>(null);
   const applyCameraRef = useRef<
@@ -243,6 +247,8 @@ export default function App() {
       activeTab,
       wallZoneTab,
       objectEdits,
+      avatarVisible,
+      avatarHeightCm,
     });
   }, [
     activePreset,
@@ -257,7 +263,22 @@ export default function App() {
     activeTab,
     wallZoneTab,
     objectEdits,
+    avatarVisible,
+    avatarHeightCm,
   ]);
+
+  const handleToggleAvatar = useCallback(() => {
+    setAvatarVisible((v) => !v);
+  }, []);
+
+  const handleHideAvatar = useCallback(() => {
+    setAvatarVisible(false);
+  }, []);
+
+  const handlePlaceAvatarBeforeView = useCallback(() => {
+    setAvatarVisible(true);
+    setPlaceAvatarTrigger((n) => n + 1);
+  }, []);
 
   const handleShareScene = useCallback(async () => {
     setShareState({ status: 'saving', url: '', copied: false, error: '' });
@@ -277,6 +298,8 @@ export default function App() {
           activeTab,
           wallZoneTab,
           objectEdits,
+          avatarVisible,
+          avatarHeightCm,
         },
         liveCamera
       );
@@ -307,6 +330,8 @@ export default function App() {
     activeTab,
     wallZoneTab,
     objectEdits,
+    avatarVisible,
+    avatarHeightCm,
   ]);
 
   const handleCopyShareUrl = useCallback(async () => {
@@ -720,6 +745,10 @@ export default function App() {
         onXrSessionChange={setXrSessionActive}
         onVrViewpointChange={setVrViewpoint}
         vrActionsRef={vrActionsRef}
+        avatarVisible={avatarVisible}
+        avatarHeightCm={avatarHeightCm}
+        placeAvatarTrigger={placeAvatarTrigger}
+        onHideAvatar={handleHideAvatar}
       />
 
       <ControlDock
@@ -771,6 +800,11 @@ export default function App() {
         onCopyShareUrl={handleCopyShareUrl}
         onCloseSharePanel={handleCloseSharePanel}
         sharedBanner={sharedBanner}
+        avatarVisible={avatarVisible}
+        onToggleAvatar={handleToggleAvatar}
+        avatarHeightCm={avatarHeightCm}
+        onChangeAvatarHeightCm={setAvatarHeightCm}
+        onPlaceAvatarBeforeView={handlePlaceAvatarBeforeView}
       />
 
       <CatalogManagerModal

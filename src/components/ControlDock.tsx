@@ -21,6 +21,7 @@ import {
   SlidersHorizontal,
   Sofa,
   Sun,
+  User,
   X,
 } from 'lucide-react';
 import {
@@ -58,6 +59,7 @@ import {
   isEditableObjectEnabledInDesign,
 } from '../scene/objectCatalog';
 import { GyroStatus, VR_VIEWPOINTS, VrViewpointId } from '../scene/vrPanorama';
+import { AVATAR_HEIGHT_PRESETS, AvatarHeightCm } from '../scene/vrAvatar';
 import { DesignTab, WallZoneTab } from '../state/storage';
 
 export interface SharePanelState {
@@ -121,6 +123,11 @@ interface ControlDockProps {
   onCopyShareUrl: () => void;
   onCloseSharePanel: () => void;
   sharedBanner: SharedBannerState | null;
+  avatarVisible: boolean;
+  onToggleAvatar: () => void;
+  avatarHeightCm: AvatarHeightCm;
+  onChangeAvatarHeightCm: (heightCm: AvatarHeightCm) => void;
+  onPlaceAvatarBeforeView: () => void;
 }
 
 export function ControlDock({
@@ -172,6 +179,11 @@ export function ControlDock({
   onCopyShareUrl,
   onCloseSharePanel,
   sharedBanner,
+  avatarVisible,
+  onToggleAvatar,
+  avatarHeightCm,
+  onChangeAvatarHeightCm,
+  onPlaceAvatarBeforeView,
 }: ControlDockProps) {
   void catalogVersion;
   const [restoreListOpen, setRestoreListOpen] = useState(false);
@@ -1402,8 +1414,56 @@ export function ControlDock({
                   })}
                 </div>
 
-                {/* Gyroscope Status + Recenter + Quest 2 WebXR + Fullscreen + Exit */}
+                {/* Gyroscope Status + Avatar Height/Figure + Recenter + Quest 2 WebXR + Fullscreen + Exit */}
                 <div className="flex flex-wrap items-center gap-1.5">
+                  <div
+                    className="flex items-center bg-[#202422] p-0.5"
+                    role="group"
+                    aria-label="Рост VR-аватара и уровня глаз"
+                  >
+                    <span className="px-1.5 text-[10px] font-medium text-[#9eb0a3]">Рост</span>
+                    {AVATAR_HEIGHT_PRESETS.map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => onChangeAvatarHeightCm(h)}
+                        className={`font-mono-nums px-1.5 py-0.5 text-[10.5px] font-medium transition-colors ${
+                          avatarHeightCm === h
+                            ? 'bg-[#7a9181] text-[#111412]'
+                            : 'text-[#c4c2bb] hover:text-white'
+                        }`}
+                        title={`Установить рост ${h} см (высота глаз и фигуры)`}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={onToggleAvatar}
+                    title="Показать или скрыть масштабную фигуру гостя в комнате"
+                    className={`flex items-center gap-1 border px-2 py-1 text-[11px] font-medium transition-colors ${
+                      avatarVisible
+                        ? 'border-[#7a9181]/70 bg-[#253129] text-[#e6f0e9]'
+                        : 'border-white/12 bg-[#222524] text-[#d8d6cf] hover:bg-[#2d312f] hover:text-white'
+                    }`}
+                  >
+                    <User className="h-3.5 w-3.5 text-[#9cb8a4]" />
+                    <span>Фигура</span>
+                  </button>
+
+                  {avatarVisible && (
+                    <button
+                      type="button"
+                      onClick={onPlaceAvatarBeforeView}
+                      title="Переставить масштабную фигуру прямо перед текущим взглядом"
+                      className="border border-white/12 bg-[#222524] px-2 py-1 text-[10.5px] font-medium text-[#d8d6cf] transition-colors hover:bg-[#2d312f] hover:text-white"
+                    >
+                      Сюда
+                    </button>
+                  )}
+
                   <span className="border border-white/10 bg-[#1d201f] px-2 py-1 text-[10.5px] text-[#b9c6bd]">
                     {vrGyroStatus === 'active'
                       ? 'Гироскоп активен'
@@ -1462,9 +1522,67 @@ export function ControlDock({
               </div>
               {xrSupported && (
                 <div className="mt-1.5 border-t border-white/8 pt-1 text-[10px] text-[#9eb0a3]">
-                  Quest 2: левый стик — ходьба · правый стик вверх — телепорт (навести и отпустить) · правый влево/вправо — поворот 30° · A/X — комнаты
+                  Quest 2: VR-руки и контур на полу активны · левый стик — ходьба · правый вверх — телепорт · правый влево/вправо — 30° · A/X — комнаты
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Scale Avatar Strip (Height & Quick Placement) */}
+          {avatarVisible && !vrPanoMode && !dockCollapsed && (
+            <div
+              className="mb-1.5 flex max-w-full flex-wrap items-center justify-center gap-2 border border-[#7a9181]/38 bg-[#171918]/96 px-2.5 py-1.5 shadow-xl"
+              role="region"
+              aria-label="Настройки масштабного аватара"
+            >
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#d9e5dc]">
+                <User className="h-3.5 w-3.5 text-[#9cb8a4]" />
+                <span>Аватар</span>
+              </div>
+
+              <div
+                className="flex items-center bg-[#202422] p-0.5"
+                role="group"
+                aria-label="Рост аватара в сантиметрах"
+              >
+                {AVATAR_HEIGHT_PRESETS.map((h) => (
+                  <button
+                    key={h}
+                    type="button"
+                    onClick={() => onChangeAvatarHeightCm(h)}
+                    className={`font-mono-nums px-2 py-0.5 text-[10.5px] font-medium transition-colors ${
+                      avatarHeightCm === h
+                        ? 'bg-[#7a9181] text-[#111412]'
+                        : 'text-[#c4c2bb] hover:text-white'
+                    }`}
+                  >
+                    {h} см
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={onPlaceAvatarBeforeView}
+                className="border border-[#7a9181]/45 bg-[#202822] px-2 py-0.5 text-[10.5px] font-medium text-[#d6e4da] transition-colors hover:bg-[#2a362d] hover:text-white"
+                title="Переместить фигуру в центр текущего вида перед камерой"
+              >
+                Поставить перед собой
+              </button>
+
+              <span className="hidden text-[10px] text-[#9c9a93] md:inline">
+                2× клик по фигуре — переместить и повернуть
+              </span>
+
+              <button
+                type="button"
+                onClick={onToggleAvatar}
+                className="flex h-5 w-5 items-center justify-center text-[#9c9a93] transition-colors hover:bg-white/[0.08] hover:text-white"
+                title="Скрыть аватара"
+                aria-label="Скрыть аватара"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
 
@@ -1668,6 +1786,21 @@ export function ControlDock({
                   <span>
                     {dimensionMode === 'detailed' ? 'Все размеры' : 'Размеры'}
                   </span>
+                </button>
+
+                {/* Scale Human Avatar Toggle (160-190 cm + VR hands/footprint) */}
+                <button
+                  type="button"
+                  onClick={onToggleAvatar}
+                  title="Масштабный аватар человека в интерьере (160–190 см) + калибровка уровня глаз"
+                  className={`flex shrink-0 items-center gap-1.5 px-2 py-1.5 text-[11px] font-medium whitespace-nowrap transition-colors sm:px-2.5 sm:text-xs ${
+                    avatarVisible
+                      ? 'bg-[#7a9181] text-[#111412]'
+                      : 'bg-[#222524] text-[#d1cfc8] hover:bg-[#2c302e] hover:text-white'
+                  }`}
+                >
+                  <User className="h-3.5 w-3.5" />
+                  <span>Аватар</span>
                 </button>
 
                 {/* Share Current Environment & Camera as Short Link */}
