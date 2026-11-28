@@ -815,7 +815,6 @@ export function BathroomViewport({
     let lastDisplayedFps = -1;
     const recordFrameFps = (frameNow: number, drawStartMs: number) => {
       const el = fpsTextRef.current;
-      if (!el) return;
       const gap = fpsLastFrameMs > 0 ? frameNow - fpsLastFrameMs : 0;
       fpsLastFrameMs = frameNow;
 
@@ -829,7 +828,7 @@ export function BathroomViewport({
           fpsHasRealCadence = true;
           if (measured !== lastDisplayedFps) {
             lastDisplayedFps = measured;
-            el.textContent = `${measured} FPS`;
+            if (el) el.textContent = `${measured} FPS`;
           }
         }
       } else {
@@ -840,7 +839,7 @@ export function BathroomViewport({
           const est = Math.max(1, Math.min(60, Math.round(1000 / drawMs)));
           if (est !== lastDisplayedFps) {
             lastDisplayedFps = est;
-            el.textContent = `${est} FPS`;
+            if (el) el.textContent = `${est} FPS`;
           }
         }
       }
@@ -1809,6 +1808,8 @@ export function BathroomViewport({
           );
           if (isLeft) {
             xrHands[c].setWristInfo(activeRoomName, avatarHeightCmRef.current);
+          } else {
+            xrHands[c].setWristFps(lastDisplayedFps);
           }
         }
       }
@@ -2242,16 +2243,17 @@ export function BathroomViewport({
       requestRender();
     };
 
-    const onDoubleClick = (e: MouseEvent) => {
-      if (vrPanoModeRef.current || xrPresenting) return;
+    const isVrBrowser =
+      typeof navigator !== 'undefined' && /OculusBrowser|Quest|Meta/i.test(navigator.userAgent);
+
+    const pickEditableAtClientPoint = (clientX: number, clientY: number): THREE.Object3D | null => {
       const rect = domEl.getBoundingClientRect();
-      _ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      _ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      _ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      _ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       _raycaster.setFromCamera(_ndc, camera);
 
       const hits = _raycaster.intersectObjects(bathroom.scene.children, true);
-      let picked: THREE.Object3D | null = null;
-
       for (const hit of hits) {
         const obj = hit.object;
         if (
@@ -2265,16 +2267,18 @@ export function BathroomViewport({
         }
         const editable = findEditableAncestor(obj);
         if (editable && isEffectivelyVisible(editable)) {
-          picked = editable;
-          break;
+          return editable;
         }
         // Stop at the first opaque non-editable architectural surface (wall/floor)
         if (!isMeshTransparent(obj)) {
           break;
         }
       }
+      return null;
+    };
 
-      // Cancel any pending Walk Mode click-to-walk target triggered by double-click taps
+    const applyPickedEditable = (picked: THREE.Object3D | null) => {
+      // Cancel any pending Walk Mode click-to-walk target triggered by double-click/double-tap
       walkState.clickTarget = null;
       walkMarker.visible = false;
 
@@ -2301,6 +2305,125 @@ export function BathroomViewport({
         syncSelectionHighlight();
         requestRender();
       }
+    };
+
+    // Jitter-tolerant double-tap recognizer for Oculus Quest 2 Theater Mode, touchscreens & mouse:
+    // tolerates hand/controller wobble during trigger press and matches any two taps on the same 3D object.
+    const tapState = {
+      pointerId: null as number | null,
+      pointerType: 'mouse' as string,
+      downX: 0,
+      downY: 0,
+      downTime: 0,
+      downPicked: null as THREE.Object3D | null,
+      maxDrift: 0,
+      lastTapTime: 0,
+      lastTapX: 0,
+      lastTapY: 0,
+      lastTapObjId: null as string | null,
+      lastSelectActionTime: 0,
+    };
+
+    const onTapPointerDown = (e: PointerEvent) => {
+      if (vrPanoModeRef.current || xrPresenting || objDragState.active) return;
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (tapState.pointerId !== null) {
+        // Multi-touch (pinch-zoom) cancels tap tracking
+        tapState.pointerId = null;
+        tapState.downPicked = null;
+        return;
+      }
+      tapState.pointerId = e.pointerId;
+      tapState.pointerType = e.pointerType || 'mouse';
+      tapState.downX = e.clientX;
+      tapState.downY = e.clientY;
+      tapState.downTime = performance.now();
+      tapState.maxDrift = 0;
+      tapState.downPicked = pickEditableAtClientPoint(e.clientX, e.clientY);
+    };
+
+    const onTapPointerMove = (e: PointerEvent) => {
+      if (tapState.pointerId !== e.pointerId) return;
+      const dist = Math.hypot(e.clientX - tapState.downX, e.clientY - tapState.downY);
+      if (dist > tapState.maxDrift) {
+        tapState.maxDrift = dist;
+      }
+    };
+
+    const onTapPointerCancel = (e: PointerEvent) => {
+      if (tapState.pointerId === e.pointerId) {
+        tapState.pointerId = null;
+        tapState.downPicked = null;
+      }
+    };
+
+    const onTapPointerUp = (e: PointerEvent) => {
+      if (tapState.pointerId !== e.pointerId) return;
+      const downX = tapState.downX;
+      const downY = tapState.downY;
+      const downTime = tapState.downTime;
+      const downPicked = tapState.downPicked;
+      const maxDrift = Math.max(
+        tapState.maxDrift,
+        Math.hypot(e.clientX - downX, e.clientY - downY)
+      );
+      const pointerType = tapState.pointerType;
+      tapState.pointerId = null;
+      tapState.downPicked = null;
+
+      if (vrPanoModeRef.current || xrPresenting || objDragState.active) return;
+
+      const now = performance.now();
+      const pressMs = now - downTime;
+      const relaxed = isVrBrowser || pointerType === 'touch' || pointerType === 'pen';
+      const maxDriftPx = relaxed ? 44 : 26;
+      const maxPressMs = relaxed ? 560 : 420;
+
+      if (maxDrift > maxDriftPx || pressMs > maxPressMs) {
+        // Real camera drag / orbit gesture — not a tap
+        tapState.lastTapTime = 0;
+        tapState.lastTapObjId = null;
+        return;
+      }
+
+      // Prefer object under release point, falling back to object under press point (handles trigger-release wobble on thin fixtures)
+      const upPicked = pickEditableAtClientPoint(e.clientX, e.clientY);
+      const picked = upPicked ?? downPicked;
+      const pickedId =
+        picked && typeof picked.userData?.editableId === 'string'
+          ? (picked.userData.editableId as string)
+          : null;
+
+      const dtTap = now - tapState.lastTapTime;
+      const maxDoubleTapMs = relaxed ? 850 : 580;
+      const maxBetweenTapPx = relaxed ? 96 : 52;
+      const betweenDist = Math.hypot(e.clientX - tapState.lastTapX, e.clientY - tapState.lastTapY);
+
+      const sameObjectDoubleTap =
+        Boolean(pickedId) && pickedId === tapState.lastTapObjId && dtTap <= maxDoubleTapMs;
+      const nearbyDoubleTap = dtTap > 0 && dtTap <= maxDoubleTapMs && betweenDist <= maxBetweenTapPx;
+
+      if (sameObjectDoubleTap || nearbyDoubleTap) {
+        tapState.lastTapTime = 0;
+        tapState.lastTapObjId = null;
+        tapState.lastSelectActionTime = now;
+        applyPickedEditable(picked);
+      } else {
+        tapState.lastTapTime = now;
+        tapState.lastTapX = e.clientX;
+        tapState.lastTapY = e.clientY;
+        tapState.lastTapObjId = pickedId;
+      }
+    };
+
+    const onDoubleClick = (e: MouseEvent) => {
+      if (vrPanoModeRef.current || xrPresenting) return;
+      // Avoid double-handling when our jitter-tolerant pointerup recognizer just selected/deselected
+      if (performance.now() - tapState.lastSelectActionTime < 260) return;
+      tapState.lastTapTime = 0;
+      tapState.lastTapObjId = null;
+      tapState.lastSelectActionTime = performance.now();
+      applyPickedEditable(pickEditableAtClientPoint(e.clientX, e.clientY));
     };
 
     // Capture-phase pointerdown intercepts dragging on the selected object before OrbitControls / Walk Mode
@@ -2561,9 +2684,10 @@ export function BathroomViewport({
       walkState.lastX = e.clientX;
       walkState.lastY = e.clientY;
 
+      const walkDragThreshold = isVrBrowser ? 18 : 6;
       if (
         !walkState.dragMoved &&
-        Math.hypot(e.clientX - walkState.downX, e.clientY - walkState.downY) > 6
+        Math.hypot(e.clientX - walkState.downX, e.clientY - walkState.downY) > walkDragThreshold
       ) {
         walkState.dragMoved = true;
       }
@@ -2675,6 +2799,10 @@ export function BathroomViewport({
     domEl.addEventListener('pointerup', finishObjectDrag, { capture: true });
     domEl.addEventListener('pointercancel', finishObjectDrag, { capture: true });
     domEl.addEventListener('wheel', onObjectWheelRotate, { capture: true, passive: false });
+    domEl.addEventListener('pointerdown', onTapPointerDown);
+    domEl.addEventListener('pointermove', onTapPointerMove);
+    domEl.addEventListener('pointerup', onTapPointerUp);
+    domEl.addEventListener('pointercancel', onTapPointerCancel);
     domEl.addEventListener('pointerdown', onPointerDown);
     domEl.addEventListener('pointermove', onPointerMove);
     domEl.addEventListener('pointerup', onPointerUp);
@@ -3064,6 +3192,10 @@ export function BathroomViewport({
       domEl.removeEventListener('pointerup', finishObjectDrag, { capture: true });
       domEl.removeEventListener('pointercancel', finishObjectDrag, { capture: true });
       domEl.removeEventListener('wheel', onObjectWheelRotate, { capture: true });
+      domEl.removeEventListener('pointerdown', onTapPointerDown);
+      domEl.removeEventListener('pointermove', onTapPointerMove);
+      domEl.removeEventListener('pointerup', onTapPointerUp);
+      domEl.removeEventListener('pointercancel', onTapPointerCancel);
       domEl.removeEventListener('pointerdown', onPointerDown);
       domEl.removeEventListener('pointermove', onPointerMove);
       domEl.removeEventListener('pointerup', onPointerUp);

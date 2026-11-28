@@ -88,13 +88,15 @@ export interface VrHandInstance {
   setHandedness: (handedness: 'left' | 'right') => void;
   setPose: (trigger: number, grip: number, aimingTeleport: boolean, dt: number) => void;
   setWristInfo: (roomName: string, heightCm: number) => void;
+  setWristFps: (fps: number) => void;
   dispose: () => void;
 }
 
 /**
  * Stylized articulated procedural VR hand for Quest 2 WebXR controllers.
  * Built with matte architectural shell, brushed sage-metal wrist collar, dark satin cuff,
- * articulated index/thumb/grip fingers, and a subtle left-wrist room & height display.
+ * articulated index/thumb/grip fingers, and subtle architectural wrist displays
+ * (left hand: room & avatar height; right hand: live FPS readout).
  */
 export function createVrHandController(
   initialHandedness: 'left' | 'right',
@@ -242,7 +244,7 @@ export function createVrHandController(
   thumbDist.position.set(0, 0, -0.014);
   thumbDistPivot.add(thumbDist);
 
-  // 7. Subtle Left-Wrist Architectural Status Bezel (visible only on left hand)
+  // 7. Subtle Wrist Architectural Status Bezel (left hand: room/height, right hand: live FPS)
   const wristCanvas = document.createElement('canvas');
   wristCanvas.width = 256;
   wristCanvas.height = 112;
@@ -279,10 +281,11 @@ export function createVrHandController(
   let smoothTrigger = 0;
   let smoothGrip = 0;
   let smoothPoint = 0;
-  let lastRoomText = '';
-  let lastHeightCm = -1;
+  let lastRoomText = 'Гостиная';
+  let lastHeightCm: number = DEFAULT_AVATAR_HEIGHT_CM;
+  let lastFps = -1;
 
-  const drawWristDisplay = (roomName: string, heightCm: number) => {
+  const drawWristFrame = () => {
     if (!wristCtx) return;
     wristCtx.fillStyle = '#151817';
     wristCtx.fillRect(0, 0, 256, 112);
@@ -290,6 +293,11 @@ export function createVrHandController(
     wristCtx.strokeStyle = 'rgba(142, 169, 151, 0.65)';
     wristCtx.lineWidth = 4;
     wristCtx.strokeRect(4, 4, 248, 104);
+  };
+
+  const drawWristDisplay = (roomName: string, heightCm: number) => {
+    if (!wristCtx) return;
+    drawWristFrame();
 
     wristCtx.fillStyle = '#9cb8a4';
     wristCtx.font = '600 20px system-ui, -apple-system, sans-serif';
@@ -304,14 +312,41 @@ export function createVrHandController(
     wristTex.needsUpdate = true;
   };
 
+  const drawWristFpsDisplay = (fps: number) => {
+    if (!wristCtx) return;
+    drawWristFrame();
+
+    wristCtx.fillStyle = '#9cb8a4';
+    wristCtx.font = '600 20px system-ui, -apple-system, sans-serif';
+    wristCtx.textBaseline = 'top';
+    wristCtx.fillText('VR · КАДРЫ', 16, 14);
+
+    const statusColor =
+      fps <= 0 ? '#7c8680' : fps >= 60 ? '#9cb8a4' : fps >= 40 ? '#e4b468' : '#e08e8e';
+    wristCtx.fillStyle = statusColor;
+    wristCtx.beginPath();
+    wristCtx.arc(24, 67, 6, 0, Math.PI * 2);
+    wristCtx.fill();
+
+    wristCtx.fillStyle = fps > 0 ? '#f0efec' : '#b5bab6';
+    wristCtx.font = '600 30px ui-monospace, SFMono-Regular, Menlo, monospace';
+    wristCtx.fillText(fps > 0 ? `${fps} FPS` : '-- FPS', 40, 51);
+
+    wristTex.needsUpdate = true;
+  };
+
   const applyHandedness = (handedness: 'left' | 'right') => {
     currentHandedness = handedness;
     mirrorGroup.scale.x = handedness === 'left' ? -1 : 1;
-    wristHudGroup.visible = handedness === 'left';
+    wristHudGroup.visible = true;
+    if (handedness === 'left') {
+      drawWristDisplay(lastRoomText, lastHeightCm);
+    } else {
+      drawWristFpsDisplay(lastFps);
+    }
   };
 
   applyHandedness(initialHandedness);
-  drawWristDisplay('Гостиная', DEFAULT_AVATAR_HEIGHT_CM);
   tagIgnoreRaycast(root);
 
   return {
@@ -352,7 +387,17 @@ export function createVrHandController(
       if (roomName === lastRoomText && heightCm === lastHeightCm) return;
       lastRoomText = roomName;
       lastHeightCm = heightCm;
-      drawWristDisplay(roomName, heightCm);
+      if (currentHandedness === 'left') {
+        drawWristDisplay(roomName, heightCm);
+      }
+    },
+    setWristFps: (fps) => {
+      const rounded = fps > 0 ? Math.round(fps) : -1;
+      if (rounded === lastFps) return;
+      lastFps = rounded;
+      if (currentHandedness === 'right') {
+        drawWristFpsDisplay(rounded);
+      }
     },
     dispose: () => {
       disposeObjectTree(root);
