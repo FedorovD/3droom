@@ -43,9 +43,10 @@ service cloud.firestore {
     function isValidObjectEditEntry(entry) {
       return entry is map
         && entry.keys().hasAll(['id'])
-        && entry.keys().hasOnly(['id', 'offset', 'deleted', 'variant'])
+        && entry.keys().hasOnly(['id', 'offset', 'rotY', 'deleted', 'variant'])
         && isShortToken(entry.id, 64)
         && (!('offset' in entry) || isOffsetVec3(entry.offset))
+        && (!('rotY' in entry) || isFiniteBounds(entry.rotY, -360, 360))
         && (!('deleted' in entry) || entry.deleted is bool)
         && (!('variant' in entry) || isShortToken(entry.variant, 48));
     }
@@ -167,6 +168,205 @@ service cloud.firestore {
       allow create: if isValidShareId(shareId) && isValidSharedScene(incoming());
       allow update: if false;
       allow delete: if false;
+    }
+
+    // Custom interior catalog items (photos + free-text dimensions/params + AI-synced 3D PBR recipe)
+    function isValidCatalogItemId(id) {
+      return id is string && id.size() >= 8 && id.size() <= 32 && id.matches('^cust_[a-zA-Z0-9]+$');
+    }
+
+    function isValidCatalogType(t) {
+      return t in [
+        'sofa',
+        'bed',
+        'chair',
+        'table',
+        'storage',
+        'kitchen',
+        'lighting',
+        'art',
+        'mirror',
+        'rug',
+        'textile',
+        'partition',
+        'media_decor',
+        'decor',
+        'bath_fixtures'
+      ];
+    }
+
+    function isValidHexColor(h) {
+      return h is string && h.matches('^#[0-9a-fA-F]{6}$');
+    }
+
+    function isValidImageDataUrl(s) {
+      return s is string
+        && s.size() >= 30
+        && s.size() <= 360000
+        && s.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$');
+    }
+
+    function isValidDimensionsVec3(v) {
+      return v is list
+        && v.size() == 3
+        && isFiniteBounds(v[0], 0.05, 6.0)
+        && isFiniteBounds(v[1], 0.04, 3.5)
+        && isFiniteBounds(v[2], 0.04, 5.0);
+    }
+
+    function isValidCatalogShape(sh) {
+      return sh is map
+        && sh.keys().hasAll([
+          'silhouette',
+          'columns',
+          'rows',
+          'legStyle',
+          'legHeightM',
+          'glassZone',
+          'hasFluting',
+          'hasTopContrast',
+          'handleStyle',
+          'hasBacklight'
+        ])
+        && sh.keys().hasOnly([
+          'silhouette',
+          'columns',
+          'rows',
+          'legStyle',
+          'legHeightM',
+          'glassZone',
+          'hasFluting',
+          'hasTopContrast',
+          'handleStyle',
+          'hasBacklight',
+          'bays',
+          'glassFrameStyle',
+          'upperSectionRatio'
+        ])
+        && isShortToken(sh.silhouette, 32)
+        && isFiniteBounds(sh.columns, 1, 4)
+        && isFiniteBounds(sh.rows, 1, 4)
+        && sh.legStyle in ['straight', 'tapered', 'sled', 'plinth', 'floating']
+        && isFiniteBounds(sh.legHeightM, 0.0, 0.75)
+        && sh.glassZone in ['none', 'top', 'left', 'right', 'full', 'center']
+        && sh.hasFluting is bool
+        && sh.hasTopContrast is bool
+        && sh.handleStyle in ['none', 'vertical_bar', 'horizontal_bar', 'knob', 'edge_pull']
+        && sh.hasBacklight is bool
+        && (!('bays' in sh) || (
+          sh.bays is list
+          && sh.bays.size() >= 1
+          && sh.bays.size() <= 4
+          && sh.bays.hasOnly([
+            'door',
+            'open_shelves',
+            'drawers',
+            'glass_door',
+            'glass_top_door',
+            'open_top_door'
+          ])
+        ))
+        && (!('glassFrameStyle' in sh) || sh.glassFrameStyle in ['body', 'metal', 'secondary'])
+        && (!('upperSectionRatio' in sh) || isFiniteBounds(sh.upperSectionRatio, 0.25, 0.75));
+    }
+
+    function isValidCatalogSpec(spec) {
+      return spec is map
+        && spec.keys().hasAll([
+          'primaryHex',
+          'secondaryHex',
+          'metalHex',
+          'roughness',
+          'metalness',
+          'textureKind',
+          'subtitle'
+        ])
+        && spec.keys().hasOnly([
+          'primaryHex',
+          'secondaryHex',
+          'metalHex',
+          'roughness',
+          'metalness',
+          'textureKind',
+          'glassTintHex',
+          'dimensionsM',
+          'shape',
+          'subtitle'
+        ])
+        && isValidHexColor(spec.primaryHex)
+        && isValidHexColor(spec.secondaryHex)
+        && isValidHexColor(spec.metalHex)
+        && isFiniteBounds(spec.roughness, 0.05, 1.0)
+        && isFiniteBounds(spec.metalness, 0.0, 1.0)
+        && spec.textureKind in [
+          'fabric',
+          'wood',
+          'stone',
+          'matte',
+          'art_arch',
+          'art_botanic',
+          'art_mono',
+          'art_terracotta'
+        ]
+        && spec.subtitle is string
+        && spec.subtitle.size() <= 120
+        && (!('glassTintHex' in spec) || spec.glassTintHex == '' || isValidHexColor(spec.glassTintHex))
+        && (!('dimensionsM' in spec) || isValidDimensionsVec3(spec.dimensionsM))
+        && (!('shape' in spec) || isValidCatalogShape(spec.shape));
+    }
+
+    function isValidCustomCatalogItem(data) {
+      return data is map
+        && data.keys().hasAll([
+          'id',
+          'type',
+          'title',
+          'specsText',
+          'photos',
+          'thumbnailUrl',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'type',
+          'title',
+          'specsText',
+          'photos',
+          'thumbnailUrl',
+          'status',
+          'spec',
+          'errorMessage',
+          'refinementNotes',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidCatalogItemId(data.id)
+        && isValidCatalogType(data.type)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 80
+        && data.specsText is string && data.specsText.size() <= 1200
+        && data.photos is list && data.photos.size() >= 1 && data.photos.size() <= 4
+        && isValidImageDataUrl(data.photos[0])
+        && isValidImageDataUrl(data.thumbnailUrl)
+        && data.status in ['pending', 'synced', 'error']
+        && (!('spec' in data) || isValidCatalogSpec(data.spec))
+        && (!('errorMessage' in data) || (data.errorMessage is string && data.errorMessage.size() <= 300))
+        && (!('refinementNotes' in data) || (data.refinementNotes is string && data.refinementNotes.size() <= 1000))
+        && isFiniteBounds(data.createdAt, 1700000000000, 4102444800000)
+        && isFiniteBounds(data.updatedAt, 1700000000000, 4102444800000);
+    }
+
+    match /customCatalogItems/{itemId} {
+      allow get: if isValidCatalogItemId(itemId);
+      allow list: if request.query.limit != null && request.query.limit <= 100;
+      allow create: if isValidCatalogItemId(itemId)
+        && isValidCustomCatalogItem(incoming())
+        && incoming().id == itemId;
+      allow update: if isValidCatalogItemId(itemId)
+        && isValidCustomCatalogItem(incoming())
+        && incoming().id == itemId;
+      allow delete: if isValidCatalogItemId(itemId);
     }
   }
 }

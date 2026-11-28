@@ -1,5 +1,16 @@
 import { MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Check, Move, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Move,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  RotateCw,
+  Trash2,
+  X,
+} from 'lucide-react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -14,13 +25,22 @@ import {
   ViewMode,
 } from '../scene/dimensions';
 import {
+  applyEditableObjectTransform,
   EditableMeta,
   findEditableAncestor,
   getEditableMeta,
   isEffectivelyVisible,
+  isPlacedObjectId,
+  normalizeRotationDeg,
   ObjectEditsMap,
 } from '../scene/editableObjects';
-import { getVariantsForType, getVariantThumbnail } from '../scene/objectCatalog';
+import {
+  EditableObjectType,
+  getVariantById,
+  getVariantsForType,
+  getVariantThumbnail,
+  VariantShapeSpec,
+} from '../scene/objectCatalog';
 import {
   getInitialWalkPose,
   getRoomNameAt,
@@ -52,6 +72,11 @@ export interface VrViewportActions {
   toggleFullscreen: () => Promise<boolean>;
 }
 
+export interface SpawnPose {
+  position: [number, number, number];
+  rotY: number;
+}
+
 interface BathroomViewportProps {
   activePreset: CameraPresetId;
   presetTrigger: number;
@@ -63,7 +88,10 @@ interface BathroomViewportProps {
   walkMode: boolean;
   onCurrentRoomChange: (room: string) => void;
   objectEdits: ObjectEditsMap;
+  catalogVersion: number;
+  onOpenCatalogModal: (initialType?: EditableObjectType) => void;
   onMoveObject: (id: string, offset: [number, number, number]) => void;
+  onRotateObject: (id: string, rotYDeg: number) => void;
   onReplaceObject: (id: string, variantId: string | null) => void;
   onDeleteObject: (id: string) => void;
   onResetObject: (id: string) => void;
@@ -71,6 +99,10 @@ interface BathroomViewportProps {
   applyCameraRef?: MutableRefObject<
     ((cam: PersistedCameraState, targetWalkMode: boolean) => void) | null
   >;
+  getSpawnPoseRef?: MutableRefObject<
+    ((type: EditableObjectType, shape?: VariantShapeSpec) => SpawnPose) | null
+  >;
+  focusPlacedObjectRef?: MutableRefObject<((objectId: string) => void) | null>;
   vrPanoMode: boolean;
   vrViewpoint: VrViewpointId;
   vrRecenterTrigger: number;
@@ -184,12 +216,17 @@ export function BathroomViewport({
   walkMode,
   onCurrentRoomChange,
   objectEdits,
+  catalogVersion,
+  onOpenCatalogModal,
   onMoveObject,
+  onRotateObject,
   onReplaceObject,
   onDeleteObject,
   onResetObject,
   captureCameraRef,
   applyCameraRef,
+  getSpawnPoseRef,
+  focusPlacedObjectRef,
   vrPanoMode,
   vrViewpoint,
   vrRecenterTrigger,
@@ -209,6 +246,9 @@ export function BathroomViewport({
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [moveAxis, setMoveAxis] = useState<'xz' | 'y'>('xz');
   const [isDraggingObj, setIsDraggingObj] = useState(false);
+  const [rotInputValue, setRotInputValue] = useState('0');
+  const [isEditingRot, setIsEditingRot] = useState(false);
+  const skipRotBlurCommitRef = useRef(false);
 
   // Mutable refs so React state updates never recreate the WebGL context
   const controllerRef = useRef<BathroomSceneController | null>(null);
@@ -218,6 +258,7 @@ export function BathroomViewport({
   const onRoomChangeRef = useRef(onCurrentRoomChange);
   const objectEditsRef = useRef<ObjectEditsMap>(objectEdits);
   const onMoveObjectRef = useRef(onMoveObject);
+  const onRotateObjectRef = useRef(onRotateObject);
   const onReplaceObjectRef = useRef(onReplaceObject);
   const onDeleteObjectRef = useRef(onDeleteObject);
   const onResetObjectRef = useRef(onResetObject);
@@ -229,6 +270,8 @@ export function BathroomViewport({
   const nudgeSelectedRef = useRef<
     ((worldDx: number, worldDy: number, worldDz: number) => void) | null
   >(null);
+  const rotateSelectedRef = useRef<((deltaDeg: number) => void) | null>(null);
+  const setSelectedRotationRef = useRef<((targetDeg: number) => void) | null>(null);
   const syncSelectionHighlightRef = useRef<(() => void) | null>(null);
   const shadowDirtyRef = useRef<boolean>(false);
   const vrPanoModeRef = useRef<boolean>(vrPanoMode);
@@ -260,6 +303,10 @@ export function BathroomViewport({
   useEffect(() => {
     onMoveObjectRef.current = onMoveObject;
   }, [onMoveObject]);
+
+  useEffect(() => {
+    onRotateObjectRef.current = onRotateObject;
+  }, [onRotateObject]);
 
   useEffect(() => {
     onReplaceObjectRef.current = onReplaceObject;
@@ -348,18 +395,30 @@ export function BathroomViewport({
     requestRenderRef.current?.();
   }, [designConfig]);
 
-  // Sync saved/edited object positions & deletions
+  // Sync saved/edited object positions, replacements & deletions (and refresh whenever custom catalog syncs)
   useEffect(() => {
     objectEditsRef.current = objectEdits;
     controllerRef.current?.setObjectEdits(objectEdits);
-    if (selectedIdRef.current && objectEdits[selectedIdRef.current]?.deleted) {
+    if (
+      selectedIdRef.current &&
+      (objectEdits[selectedIdRef.current]?.deleted ||
+        (isPlacedObjectId(selectedIdRef.current) && !objectEdits[selectedIdRef.current]))
+    ) {
       setSelectedObj(null);
       setMoveMode(false);
+    } else if (selectedIdRef.current && isPlacedObjectId(selectedIdRef.current)) {
+      const placedObj = controllerRef.current?.getEditableObjects(selectedIdRef.current)?.[0];
+      if (placedObj) {
+        const meta = getEditableMeta(placedObj);
+        if (meta) setSelectedObj((prev) => (prev && prev.id === meta.id && prev.label !== meta.label ? meta : prev));
+      }
     }
     syncSelectionHighlightRef.current?.();
     shadowDirtyRef.current = true;
     requestRenderRef.current?.();
-  }, [objectEdits]);
+    const raf = requestAnimationFrame(() => requestRenderRef.current?.());
+    return () => cancelAnimationFrame(raf);
+  }, [objectEdits, catalogVersion]);
 
   // Sync 3D dimensions overlay (off / basic / detailed)
   useEffect(() => {
@@ -739,6 +798,124 @@ export function BathroomViewport({
               }
             : {}),
         };
+      };
+    }
+
+    if (getSpawnPoseRef) {
+      getSpawnPoseRef.current = (type: EditableObjectType, shape?: VariantShapeSpec): SpawnPose => {
+        camera.updateMatrixWorld(true);
+        const camPos = camera.position;
+        camera.getWorldDirection(_camDir);
+
+        const horizDir = new THREE.Vector3(_camDir.x, 0, _camDir.z);
+        if (horizDir.lengthSq() < 1e-5) {
+          horizDir.set(0, 0, -1);
+        } else {
+          horizDir.normalize();
+        }
+        _camRight.crossVectors(horizDir, _upAxis).normalize();
+
+        let sx = 5.2;
+        let sz = 4.2;
+
+        if (walkModeRef.current || vrPanoModeRef.current) {
+          sx = camPos.x + horizDir.x * 1.65;
+          sz = camPos.z + horizDir.z * 1.65;
+        } else {
+          // Orbit view: prefer exact center-screen floor intersection if cleanly in front of camera
+          let usedFloorHit = false;
+          if (_camDir.y < -0.08 && camPos.y > 0.15) {
+            const tFloor = -camPos.y / _camDir.y;
+            if (tFloor >= 1.1 && tFloor <= 6.2) {
+              const hx = camPos.x + _camDir.x * tFloor;
+              const hz = camPos.z + _camDir.z * tFloor;
+              if (hx >= 0.45 && hx <= 10.25 && hz >= 0.45 && hz <= 8.15) {
+                sx = hx;
+                sz = hz;
+                usedFloorHit = true;
+              }
+            }
+          }
+          if (!usedFloorHit) {
+            const distToTarget = Math.hypot(
+              controls.target.x - camPos.x,
+              controls.target.z - camPos.z
+            );
+            if (distToTarget >= 0.8 && distToTarget <= 5.5) {
+              sx = controls.target.x;
+              sz = controls.target.z;
+            } else {
+              sx = camPos.x + horizDir.x * 2.2;
+              sz = camPos.z + horizDir.z * 2.2;
+            }
+          }
+        }
+
+        // Clamp cleanly inside the apartment interior floor area
+        sx = THREE.MathUtils.clamp(sx, 0.72, 10.0);
+        sz = THREE.MathUtils.clamp(sz, 0.72, 7.92);
+
+        // Gently offset sideways if another placed item already occupies this exact spot
+        for (let attempt = 0; attempt < 6; attempt++) {
+          let crowded = false;
+          for (const [id, edit] of Object.entries(objectEditsRef.current)) {
+            if (!isPlacedObjectId(id) || edit.deleted || !edit.offset) continue;
+            const dSq = (edit.offset[0] - sx) ** 2 + (edit.offset[2] - sz) ** 2;
+            if (dSq < 0.36 * 0.36) {
+              crowded = true;
+              break;
+            }
+          }
+          if (!crowded) break;
+          const step = ((attempt % 2 === 0 ? 1 : -1) * (Math.floor(attempt / 2) + 1)) * 0.55;
+          sx = THREE.MathUtils.clamp(sx + _camRight.x * step, 0.72, 10.0);
+          sz = THREE.MathUtils.clamp(sz + _camRight.z * step, 0.72, 7.92);
+        }
+
+        let sy = 0;
+        if (type === 'art' || type === 'mirror') {
+          sy = 1.15;
+        } else if (type === 'textile') {
+          sy = 0.05;
+        } else if (type === 'lighting') {
+          if (shape?.silhouette === 'linear_pendant' || shape?.silhouette === 'globe_pendant') {
+            sy = 2.05;
+          } else if (shape?.silhouette === 'wall_sconce') {
+            sy = 1.45;
+          }
+        } else if (type === 'storage' && shape?.legStyle === 'floating') {
+          sy = 0.28;
+        }
+
+        // Face the spawned object's +Z front directly toward the camera, snapped to 5° increments
+        const faceYawRad = Math.atan2(camPos.x - sx, camPos.z - sz);
+        const rawDeg = (faceYawRad * 180) / Math.PI;
+        const snappedDeg = Math.round(rawDeg / 5) * 5;
+        const rotY = normalizeRotationDeg(snappedDeg === 0 ? 0 : snappedDeg);
+
+        return {
+          position: [Number(sx.toFixed(3)), Number(sy.toFixed(3)), Number(sz.toFixed(3))],
+          rotY,
+        };
+      };
+    }
+
+    if (focusPlacedObjectRef) {
+      focusPlacedObjectRef.current = (objectId: string) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const target = controllerRef.current?.getEditableObjects(objectId)?.[0];
+            if (!target) return;
+            const meta = getEditableMeta(target);
+            if (!meta) return;
+            setSelectedObj(meta);
+            setMoveMode(true);
+            setMoveAxis('xz');
+            setReplaceOpen(false);
+            syncSelectionHighlightRef.current?.();
+            requestRenderRef.current?.();
+          });
+        });
       };
     }
 
@@ -1568,13 +1745,19 @@ export function BathroomViewport({
       return null;
     };
 
-    const getObjectBasePos = (obj: THREE.Object3D): THREE.Vector3 => {
-      if (obj.userData.basePos instanceof THREE.Vector3) {
-        return obj.userData.basePos;
-      }
-      const cloned = obj.position.clone();
-      obj.userData.basePos = cloned;
-      return cloned;
+    const getObjectDimsForId = (id: string): [number, number, number] | undefined => {
+      const variantId = objectEditsRef.current[id]?.variant;
+      if (!variantId) return undefined;
+      return getVariantById(variantId)?.dimensionsM;
+    };
+
+    const getCurrentOffsetForId = (id: string): [number, number, number] => {
+      const off = objectEditsRef.current[id]?.offset;
+      return off ? [off[0], off[1], off[2]] : [0, 0, 0];
+    };
+
+    const getCurrentRotYForId = (id: string): number => {
+      return objectEditsRef.current[id]?.rotY ?? 0;
     };
 
     const applyLiveOffsetToId = (
@@ -1588,18 +1771,41 @@ export function BathroomViewport({
         THREE.MathUtils.clamp(dy, -2.4, 2.4),
         THREE.MathUtils.clamp(dz, -12, 12),
       ];
+      const rotY = getCurrentRotYForId(id);
+      const dims = getObjectDimsForId(id);
       const list = bathroom.getEditableObjects(id);
       for (const obj of list) {
-        const basePos = getObjectBasePos(obj);
-        obj.position.set(
-          basePos.x + clamped[0],
-          basePos.y + clamped[1],
-          basePos.z + clamped[2]
-        );
-        obj.updateMatrix();
-        obj.updateMatrixWorld(true);
+        applyEditableObjectTransform(obj, clamped[0], clamped[1], clamped[2], rotY, dims);
       }
       return clamped;
+    };
+
+    const applyLiveRotationToId = (id: string, nextRotYDeg: number): number => {
+      const normalized = normalizeRotationDeg(nextRotYDeg);
+      const offset =
+        objDragState.active && objDragState.editableId === id
+          ? objDragState.currentOffset
+          : getCurrentOffsetForId(id);
+      const dims = getObjectDimsForId(id);
+      const list = bathroom.getEditableObjects(id);
+      for (const obj of list) {
+        applyEditableObjectTransform(
+          obj,
+          offset[0],
+          offset[1],
+          offset[2],
+          normalized,
+          dims
+        );
+      }
+      objectEditsRef.current = {
+        ...objectEditsRef.current,
+        [id]: {
+          ...objectEditsRef.current[id],
+          rotY: normalized === 0 ? undefined : normalized,
+        },
+      };
+      return normalized;
     };
 
     const syncSelectionHighlight = () => {
@@ -1682,8 +1888,7 @@ export function BathroomViewport({
       editableId: '' as string,
       vertical: false,
       startWorldHit: new THREE.Vector3(),
-      startLocalPos: new THREE.Vector3(),
-      basePos: new THREE.Vector3(),
+      startOffset: [0, 0, 0] as [number, number, number],
       invParentQuat: new THREE.Quaternion(),
       currentOffset: [0, 0, 0] as [number, number, number],
     };
@@ -1698,16 +1903,38 @@ export function BathroomViewport({
         _invParentQuat.identity();
       }
       _localDelta.set(worldDx, worldDy, worldDz).applyQuaternion(_invParentQuat);
-      const basePos = getObjectBasePos(activeObj);
+      const curOffset = getCurrentOffsetForId(id);
       const nextOffset = applyLiveOffsetToId(
         id,
-        activeObj.position.x + _localDelta.x - basePos.x,
-        activeObj.position.y + _localDelta.y - basePos.y,
-        activeObj.position.z + _localDelta.z - basePos.z
+        curOffset[0] + _localDelta.x,
+        curOffset[1] + _localDelta.y,
+        curOffset[2] + _localDelta.z
       );
       syncSelectionHighlight();
       shadowDirtyRef.current = true;
       onMoveObjectRef.current(id, nextOffset);
+      requestRender();
+    };
+
+    rotateSelectedRef.current = (deltaDeg: number) => {
+      const id = selectedIdRef.current;
+      const activeObj = getActiveEditableObject(id);
+      if (!id || !activeObj) return;
+      const nextRot = applyLiveRotationToId(id, getCurrentRotYForId(id) + deltaDeg);
+      syncSelectionHighlight();
+      shadowDirtyRef.current = true;
+      onRotateObjectRef.current(id, nextRot);
+      requestRender();
+    };
+
+    setSelectedRotationRef.current = (targetDeg: number) => {
+      const id = selectedIdRef.current;
+      const activeObj = getActiveEditableObject(id);
+      if (!id || !activeObj || !Number.isFinite(targetDeg)) return;
+      const nextRot = applyLiveRotationToId(id, targetDeg);
+      syncSelectionHighlight();
+      shadowDirtyRef.current = true;
+      onRotateObjectRef.current(id, nextRot);
       requestRender();
     };
 
@@ -1836,24 +2063,19 @@ export function BathroomViewport({
       controls.enabled = false;
       domEl.setPointerCapture?.(e.pointerId);
 
-      const basePos = getObjectBasePos(activeObj);
+      const startOffset = getCurrentOffsetForId(selectedIdRef.current);
       objDragState.active = true;
       objDragState.pointerId = e.pointerId;
       objDragState.editableId = selectedIdRef.current;
       objDragState.vertical = useVertical;
       objDragState.startWorldHit.copy(_dragHit);
-      objDragState.startLocalPos.copy(activeObj.position);
-      objDragState.basePos.copy(basePos);
+      objDragState.startOffset = [...startOffset];
       if (activeObj.parent) {
         activeObj.parent.getWorldQuaternion(objDragState.invParentQuat).invert();
       } else {
         objDragState.invParentQuat.identity();
       }
-      objDragState.currentOffset = [
-        activeObj.position.x - basePos.x,
-        activeObj.position.y - basePos.y,
-        activeObj.position.z - basePos.z,
-      ];
+      objDragState.currentOffset = [...startOffset];
       setIsDraggingObj(true);
     };
 
@@ -1879,9 +2101,9 @@ export function BathroomViewport({
 
       _localDelta.copy(_worldDelta).applyQuaternion(objDragState.invParentQuat);
 
-      const nextDx = objDragState.startLocalPos.x + _localDelta.x - objDragState.basePos.x;
-      const nextDy = objDragState.startLocalPos.y + _localDelta.y - objDragState.basePos.y;
-      const nextDz = objDragState.startLocalPos.z + _localDelta.z - objDragState.basePos.z;
+      const nextDx = objDragState.startOffset[0] + _localDelta.x;
+      const nextDy = objDragState.startOffset[1] + _localDelta.y;
+      const nextDz = objDragState.startOffset[2] + _localDelta.z;
 
       objDragState.currentOffset = applyLiveOffsetToId(
         objDragState.editableId,
@@ -2087,6 +2309,41 @@ export function BathroomViewport({
     const onPointerUp = (e: PointerEvent) => finishPointer(e, true);
     const onPointerCancel = (e: PointerEvent) => finishPointer(e, false);
 
+    // Capture-phase wheel rotates selected object around its own vertical center axis while in Move Mode
+    let wheelRotateAccum = 0;
+    const onObjectWheelRotate = (e: WheelEvent) => {
+      if (!moveModeRef.current || !selectedIdRef.current) return;
+      if (vrPanoModeRef.current || xrPresenting) return;
+      const activeObj = getActiveEditableObject(selectedIdRef.current);
+      if (!activeObj) return;
+
+      e.preventDefault();
+      e.stopImmediatePropagation();
+
+      const rawDelta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      if (rawDelta === 0) return;
+
+      const stepDeg = e.shiftKey ? 5 : 15;
+      let steps = 0;
+      if (Math.abs(rawDelta) >= 40) {
+        // Discrete mouse wheel detent -> 1 crisp step per notch
+        wheelRotateAccum = 0;
+        steps = rawDelta < 0 ? 1 : -1;
+      } else {
+        // Smooth trackpad gesture -> accumulate to avoid hypersensitive spinning
+        wheelRotateAccum += rawDelta;
+        const threshold = 36;
+        while (Math.abs(wheelRotateAccum) >= threshold) {
+          steps += wheelRotateAccum < 0 ? 1 : -1;
+          wheelRotateAccum -= Math.sign(wheelRotateAccum) * threshold;
+        }
+      }
+
+      if (steps !== 0) {
+        rotateSelectedRef.current?.(steps * stepDeg);
+      }
+    };
+
     // Mouse wheel in Walk Mode gently steps forward/backward along horizontal gaze
     const onWheel = (e: WheelEvent) => {
       if (!walkModeRef.current) return;
@@ -2109,6 +2366,7 @@ export function BathroomViewport({
     domEl.addEventListener('pointermove', onObjectPointerMove, { capture: true });
     domEl.addEventListener('pointerup', finishObjectDrag, { capture: true });
     domEl.addEventListener('pointercancel', finishObjectDrag, { capture: true });
+    domEl.addEventListener('wheel', onObjectWheelRotate, { capture: true, passive: false });
     domEl.addEventListener('pointerdown', onPointerDown);
     domEl.addEventListener('pointermove', onPointerMove);
     domEl.addEventListener('pointerup', onPointerUp);
@@ -2460,6 +2718,11 @@ export function BathroomViewport({
     const onBeforeUnload = () => persistCurrentCamera(true);
     window.addEventListener('beforeunload', onBeforeUnload);
 
+    if (overlayRef.current) {
+      overlayRef.current.style.opacity = '0';
+      overlayRef.current.style.pointerEvents = 'none';
+    }
+
     bathroom.setLightingMode(lightingMode);
     bathroom.setFloorFinish(floorFinish);
     bathroom.setDesignConfig(designConfig);
@@ -2489,6 +2752,7 @@ export function BathroomViewport({
       domEl.removeEventListener('pointermove', onObjectPointerMove, { capture: true });
       domEl.removeEventListener('pointerup', finishObjectDrag, { capture: true });
       domEl.removeEventListener('pointercancel', finishObjectDrag, { capture: true });
+      domEl.removeEventListener('wheel', onObjectWheelRotate, { capture: true });
       domEl.removeEventListener('pointerdown', onPointerDown);
       domEl.removeEventListener('pointermove', onPointerMove);
       domEl.removeEventListener('pointerup', onPointerUp);
@@ -2535,8 +2799,12 @@ export function BathroomViewport({
       recenterVrRef.current = null;
       if (captureCameraRef) captureCameraRef.current = null;
       if (applyCameraRef) applyCameraRef.current = null;
+      if (getSpawnPoseRef) getSpawnPoseRef.current = null;
+      if (focusPlacedObjectRef) focusPlacedObjectRef.current = null;
       if (vrActionsRef) vrActionsRef.current = null;
       nudgeSelectedRef.current = null;
+      rotateSelectedRef.current = null;
+      setSelectedRotationRef.current = null;
       syncSelectionHighlightRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2582,21 +2850,75 @@ export function BathroomViewport({
   const handlePickReplacement = useCallback(
     (variantId: string | null) => {
       if (!selectedObj) return;
+      const prev = objectEditsRef.current;
+      const existing = prev[selectedObj.id];
+      const nextVariant = variantId || undefined;
+      const nextEdits: ObjectEditsMap = { ...prev };
+      if (
+        !nextVariant &&
+        !existing?.deleted &&
+        !existing?.offset &&
+        existing?.rotY === undefined
+      ) {
+        delete nextEdits[selectedObj.id];
+      } else {
+        nextEdits[selectedObj.id] = {
+          ...existing,
+          deleted: undefined,
+          variant: nextVariant,
+        };
+      }
+      objectEditsRef.current = nextEdits;
+      controllerRef.current?.setObjectEdits(nextEdits);
+      syncSelectionHighlightRef.current?.();
+      shadowDirtyRef.current = true;
+      requestRenderRef.current?.();
+      requestAnimationFrame(() => requestRenderRef.current?.());
       onReplaceObjectRef.current(selectedObj.id, variantId);
     },
     [selectedObj]
   );
 
   const activeOffset = selectedObj ? objectEdits[selectedObj.id]?.offset : undefined;
+  const activeRotY = selectedObj ? (objectEdits[selectedObj.id]?.rotY ?? 0) : 0;
+  const displayRotY = Math.round(activeRotY) || 0;
   const activeVariantId = selectedObj ? objectEdits[selectedObj.id]?.variant : undefined;
+  const activeVariantSpec = getVariantById(activeVariantId);
   const hasMovedOffset = Boolean(
     activeOffset &&
       (Math.abs(activeOffset[0]) >= 0.001 ||
         Math.abs(activeOffset[1]) >= 0.001 ||
         Math.abs(activeOffset[2]) >= 0.001)
   );
-  const hasAnyObjectEdit = hasMovedOffset || Boolean(activeVariantId);
+  const hasRotated = Math.abs(activeRotY) >= 0.05;
+  const hasAnyObjectEdit = hasMovedOffset || hasRotated || Boolean(activeVariantId);
   const replacementOptions = selectedObj ? getVariantsForType(selectedObj.type) : [];
+
+  useEffect(() => {
+    setIsEditingRot(false);
+    setRotInputValue(String(Math.round(activeRotY) || 0));
+  }, [selectedObj?.id, moveMode]);
+
+  useEffect(() => {
+    if (!isEditingRot) {
+      setRotInputValue(String(displayRotY));
+    }
+  }, [displayRotY, isEditingRot]);
+
+  const commitRotInput = useCallback(
+    (raw: string) => {
+      const cleaned = raw.trim().replace(',', '.').replace(/°+$/g, '');
+      const parsed = Number(cleaned);
+      if (cleaned !== '' && Number.isFinite(parsed)) {
+        const normalized = normalizeRotationDeg(parsed);
+        setSelectedRotationRef.current?.(normalized);
+        setRotInputValue(String(Math.round(normalized) || 0));
+      } else {
+        setRotInputValue(String(displayRotY));
+      }
+    },
+    [displayRotY]
+  );
 
   if (webglError) {
     return (
@@ -2633,11 +2955,19 @@ export function BathroomViewport({
         ref={overlayRef}
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
+        onWheel={(e) => {
+          if (!moveMode || !selectedObj) return;
+          e.preventDefault();
+          e.stopPropagation();
+          const rawDelta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+          if (rawDelta === 0) return;
+          setIsEditingRot(false);
+          const stepDeg = e.shiftKey ? 5 : 15;
+          rotateSelectedRef.current?.((rawDelta < 0 ? 1 : -1) * stepDeg);
+        }}
         style={{
           left: 0,
           top: 0,
-          opacity: 0,
-          pointerEvents: 'none',
           willChange: 'transform',
         }}
         className="fixed z-30 select-none"
@@ -2660,7 +2990,11 @@ export function BathroomViewport({
                   {selectedObj.label}
                 </span>
                 <span className="shrink-0 border border-white/10 bg-[#202422] px-1.5 py-0.5 text-[9.5px] font-medium text-[#9eb2a4]">
-                  {selectedObj.typeLabel}
+                  {isPlacedObjectId(selectedObj.id)
+                    ? selectedObj.typeLabel
+                    : activeVariantSpec
+                      ? activeVariantSpec.label
+                      : selectedObj.typeLabel}
                 </span>
               </div>
               <button
@@ -2739,26 +3073,37 @@ export function BathroomViewport({
 
             {/* Same-Type Replacement Catalog with Mini Photos */}
             {replaceOpen && replacementOptions.length > 0 && (
-              <div className="w-[276px] border-t border-white/10 bg-[#141715] p-2 sm:w-[310px]">
+              <div className="w-full min-w-[276px] border-t border-white/10 bg-[#141715] p-2 sm:min-w-[320px]">
                 <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <span className="text-[10px] font-semibold tracking-wide text-[#aebcb2] uppercase">
+                  <span className="truncate text-[10px] font-semibold tracking-wide text-[#aebcb2] uppercase">
                     {selectedObj.typeLabel} · {replacementOptions.length} вар.
                   </span>
-                  {activeVariantId && (
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => handlePickReplacement(null)}
-                      className="text-[10px] font-medium text-[#9cb8a4] transition-colors hover:text-white"
+                      onClick={() => onOpenCatalogModal(selectedObj.type)}
+                      className="flex items-center gap-0.5 text-[10px] font-medium text-[#b8d4bf] transition-colors hover:text-white"
+                      title="Добавить свой предмет этого типа"
                     >
-                      Оригинал
+                      <Plus className="h-3 w-3" />
+                      <span>Свой</span>
                     </button>
-                  )}
+                    {activeVariantId && !isPlacedObjectId(selectedObj.id) && (
+                      <button
+                        type="button"
+                        onClick={() => handlePickReplacement(null)}
+                        className="text-[10px] font-medium text-[#9cb8a4] transition-colors hover:text-white"
+                      >
+                        Оригинал
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid max-h-[246px] grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
                   {replacementOptions.map((opt) => {
                     const isSelected = activeVariantId === opt.id;
-                    const thumbSrc = getVariantThumbnail(opt);
+                    const thumbSrc = getVariantThumbnail(opt, selectedObj.id);
                     return (
                       <button
                         key={opt.id}
@@ -2778,6 +3123,11 @@ export function BathroomViewport({
                               className="h-full w-full object-cover"
                               draggable={false}
                             />
+                          )}
+                          {opt.isCustom && (
+                            <span className="absolute top-1 left-1 bg-[#141715]/88 px-1 py-0.5 text-[8.5px] font-semibold tracking-wide text-[#a9ccb4] uppercase">
+                              Свой
+                            </span>
                           )}
                           {isSelected && (
                             <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center bg-[#7a9181] text-[#111412] shadow">
@@ -2804,61 +3154,149 @@ export function BathroomViewport({
               </div>
             )}
 
-            {/* Move Mode Controls & Height Toggle (for wall-hung / XYZ objects) */}
+            {/* Move Mode Controls: Self-Axis Rotation (Scroll / Buttons) & Height Toggle */}
             {moveMode && (
               <div className="border-t border-white/10 bg-[#141615] px-2.5 py-1.5">
-                {selectedObj.axes === 'xyz' && (
-                  <div className="mb-1.5 flex items-center justify-between gap-1.5">
-                    <div className="flex bg-[#202322] p-0.5">
-                      <button
-                        type="button"
-                        onClick={() => setMoveAxis('xz')}
-                        className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                          moveAxis === 'xz'
-                            ? 'bg-[#343b36] text-white'
-                            : 'text-[#9c9a93] hover:text-[#e5e3dc]'
-                        }`}
-                      >
-                        По полу
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMoveAxis('y')}
-                        className={`px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                          moveAxis === 'y'
-                            ? 'bg-[#343b36] text-white'
-                            : 'text-[#9c9a93] hover:text-[#e5e3dc]'
-                        }`}
-                      >
-                        Высота
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => nudgeSelectedRef.current?.(0, -0.05, 0)}
-                        className="flex h-5 w-6 items-center justify-center bg-[#222624] text-[#d4d2cb] hover:bg-[#303532] hover:text-white"
-                        title="Опустить на 5 см"
-                        aria-label="Опустить на 5 см"
-                      >
-                        <ArrowDown className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => nudgeSelectedRef.current?.(0, 0.05, 0)}
-                        className="flex h-5 w-6 items-center justify-center bg-[#222624] text-[#d4d2cb] hover:bg-[#303532] hover:text-white"
-                        title="Поднять на 5 см"
-                        aria-label="Поднять на 5 см"
-                      >
-                        <ArrowUp className="h-3 w-3" />
-                      </button>
-                    </div>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        setIsEditingRot(false);
+                        rotateSelectedRef.current?.(e.shiftKey ? 5 : 15);
+                      }}
+                      className="flex h-5 w-6 items-center justify-center bg-[#222624] text-[#d4d2cb] transition-colors hover:bg-[#303532] hover:text-white"
+                      title="Повернуть влево на 15° (или колёсико вверх)"
+                      aria-label="Повернуть влево"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                    </button>
+                    <label
+                      className="flex h-5 items-center border border-white/12 bg-[#1c201e] px-1 transition-colors hover:border-white/25 focus-within:border-[#e4b468]"
+                      title="Угол поворота в градусах — нажмите, чтобы ввести своё значение"
+                    >
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        aria-label="Угол поворота в градусах"
+                        value={isEditingRot ? rotInputValue : String(displayRotY)}
+                        onFocus={(e) => {
+                          skipRotBlurCommitRef.current = false;
+                          setIsEditingRot(true);
+                          setRotInputValue(String(displayRotY));
+                          e.currentTarget.select();
+                        }}
+                        onChange={(e) => {
+                          const cleaned = e.target.value.replace(/[^0-9.,-]/g, '');
+                          setRotInputValue(cleaned);
+                        }}
+                        onBlur={() => {
+                          setIsEditingRot(false);
+                          if (skipRotBlurCommitRef.current) {
+                            skipRotBlurCommitRef.current = false;
+                            return;
+                          }
+                          commitRotInput(rotInputValue);
+                        }}
+                        onKeyDown={(e) => {
+                          e.stopPropagation();
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            skipRotBlurCommitRef.current = true;
+                            commitRotInput(rotInputValue);
+                            setIsEditingRot(false);
+                            e.currentTarget.blur();
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            skipRotBlurCommitRef.current = true;
+                            setIsEditingRot(false);
+                            setRotInputValue(String(displayRotY));
+                            e.currentTarget.blur();
+                          } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            const step = e.shiftKey ? 5 : 1;
+                            const delta = e.key === 'ArrowUp' ? step : -step;
+                            const parsed = Number(rotInputValue.trim().replace(',', '.'));
+                            const base = Number.isFinite(parsed) ? parsed : displayRotY;
+                            const nextVal = normalizeRotationDeg(base + delta);
+                            setSelectedRotationRef.current?.(nextVal);
+                            setRotInputValue(String(Math.round(nextVal) || 0));
+                          }
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        className="font-mono-nums w-[34px] select-text bg-transparent text-right text-[10px] font-semibold text-[#e4b468] outline-none"
+                      />
+                      <span className="font-mono-nums ml-0.5 text-[10px] font-semibold text-[#e4b468]/80">
+                        °
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        setIsEditingRot(false);
+                        rotateSelectedRef.current?.(e.shiftKey ? -5 : -15);
+                      }}
+                      className="flex h-5 w-6 items-center justify-center bg-[#222624] text-[#d4d2cb] transition-colors hover:bg-[#303532] hover:text-white"
+                      title="Повернуть вправо на 15° (или колёсико вниз)"
+                      aria-label="Повернуть вправо"
+                    >
+                      <RotateCw className="h-3 w-3" />
+                    </button>
                   </div>
-                )}
+
+                  {selectedObj.axes === 'xyz' && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex bg-[#202322] p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setMoveAxis('xz')}
+                          className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                            moveAxis === 'xz'
+                              ? 'bg-[#343b36] text-white'
+                              : 'text-[#9c9a93] hover:text-[#e5e3dc]'
+                          }`}
+                        >
+                          Пол
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMoveAxis('y')}
+                          className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                            moveAxis === 'y'
+                              ? 'bg-[#343b36] text-white'
+                              : 'text-[#9c9a93] hover:text-[#e5e3dc]'
+                          }`}
+                        >
+                          Высота
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => nudgeSelectedRef.current?.(0, -0.05, 0)}
+                          className="flex h-5 w-5 items-center justify-center bg-[#222624] text-[#d4d2cb] hover:bg-[#303532] hover:text-white"
+                          title="Опустить на 5 см"
+                          aria-label="Опустить на 5 см"
+                        >
+                          <ArrowDown className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => nudgeSelectedRef.current?.(0, 0.05, 0)}
+                          className="flex h-5 w-5 items-center justify-center bg-[#222624] text-[#d4d2cb] hover:bg-[#303532] hover:text-white"
+                          title="Поднять на 5 см"
+                          aria-label="Поднять на 5 см"
+                        >
+                          <ArrowUp className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <p className="text-[10px] leading-tight text-[#a3a19a]">
-                  {selectedObj.axes === 'xyz'
-                    ? 'Тяните объект мышью · Shift — высота · Стрелки — 2 см'
-                    : 'Тяните объект мышью или стрелками (шаг 2 см)'}
+                  Колесо мыши — поворот на 15° (Shift — 5°) · Перетаскивание и стрелки — сдвиг
                 </p>
               </div>
             )}

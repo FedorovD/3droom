@@ -24,12 +24,83 @@
         }
       },
       "required": ["version", "createdAt", "state", "camera"]
+    },
+    "CustomCatalogItem": {
+      "title": "CustomCatalogItem",
+      "description": "User-submitted interior catalog item with reference photos, free-text dimensions/notes, and AI-analyzed 3D PBR & procedural shape recipe.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^cust_[a-zA-Z0-9]+$",
+          "minLength": 8,
+          "maxLength": 32,
+          "description": "Unique custom catalog item identifier."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["sofa", "bed", "chair", "table", "storage", "kitchen", "lighting", "art", "mirror", "rug", "textile", "partition", "media_decor", "decor", "bath_fixtures"],
+          "description": "Editable interior object category."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Display name of the furniture item."
+        },
+        "specsText": {
+          "type": "string",
+          "maxLength": 1200,
+          "description": "Free-text dimensions and material/feature notes."
+        },
+        "photos": {
+          "type": "array",
+          "description": "1 to 4 compressed reference JPEG/PNG/WebP data URLs."
+        },
+        "thumbnailUrl": {
+          "type": "string",
+          "maxLength": 360000,
+          "description": "Compressed 240x162 cover thumbnail data URL."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "synced", "error"],
+          "description": "Synchronization status with Gemini Vision analysis."
+        },
+        "spec": {
+          "type": "object",
+          "description": "AI-analyzed PBR palette, dimensionsM [W,H,D], and structured 3D procedural shape blueprint."
+        },
+        "errorMessage": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Optional last sync error message."
+        },
+        "refinementNotes": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Optional user feedback and correction instructions used when regenerating the 3D model."
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation epoch milliseconds."
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Last update epoch milliseconds."
+        }
+      },
+      "required": ["id", "type", "title", "specsText", "photos", "thumbnailUrl", "status", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
     "/sharedScenes/{shareId}": {
       "schema": { "$ref": "#/entities/SharedScene" },
       "description": "Publicly readable (by exact unguessable ID only), immutable shared 3D apartment scene snapshots. Listing, updating, and deleting are strictly forbidden."
+    },
+    "/customCatalogItems/{itemId}": {
+      "schema": { "$ref": "#/entities/CustomCatalogItem" },
+      "description": "Shared interior furniture catalog items synced with Gemini Vision for instant 3D replacement."
     }
   }
 }

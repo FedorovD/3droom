@@ -4,14 +4,26 @@ import {
   getEditableType,
   getEditableTypeInfo,
   getVariantById,
+  getVariantSignature,
+  migrateLegacyVariantId,
   ObjectVariantMaterialCache,
+  registerDynamicEditableType,
+  unregisterDynamicEditableType,
 } from './objectCatalog';
+import {
+  buildStandalonePlacedModel,
+  buildVariantReplacementModel,
+  disposeVariantModelGroup,
+  shouldUseProceduralModel,
+} from './variantModels';
 
 export type EditableMoveAxes = 'xz' | 'xyz';
 
 export interface ObjectEditState {
   /** Local-space delta [dx, dy, dz] from the object's original basePos */
   offset?: [number, number, number];
+  /** Rotation around the object's own vertical center axis, in degrees (-180, 180] */
+  rotY?: number;
   deleted?: boolean;
   /** Optional catalog replacement variant ID of the same EditableObjectType */
   variant?: string;
@@ -83,6 +95,28 @@ const editableLabelRegistry = new Map<string, string>(
   Object.entries(DEFAULT_EDITABLE_LABELS)
 );
 
+const PLACED_ID_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+
+export function isPlacedObjectId(id: string): boolean {
+  return id.startsWith('placed_');
+}
+
+export function generatePlacedObjectId(): string {
+  const bytes = new Uint8Array(6);
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  let suffix = '';
+  for (let i = 0; i < bytes.length; i++) {
+    suffix += PLACED_ID_ALPHABET[bytes[i] % PLACED_ID_ALPHABET.length];
+  }
+  return `placed_${suffix}`;
+}
+
 export function getEditableLabel(id: string): string {
   return editableLabelRegistry.get(id) ?? id;
 }
@@ -109,7 +143,10 @@ export function markEditable<T extends THREE.Object3D>(
 export function getEditableMeta(obj: THREE.Object3D): EditableMeta | null {
   const id = obj.userData?.editableId;
   if (typeof id !== 'string' || !id) return null;
-  const type = getEditableType(id);
+  const type =
+    typeof obj.userData.editableType === 'string'
+      ? (obj.userData.editableType as EditableObjectType)
+      : getEditableType(id);
   return {
     id,
     label:
@@ -152,6 +189,11 @@ type MeshVariantRole =
 const _roleColorHsl = { h: 0, s: 0, l: 0 };
 const _meshSizeVec = new THREE.Vector3();
 
+function isTrulyEmissive(std: THREE.MeshStandardMaterial): boolean {
+  if (!std.emissive || std.emissiveIntensity <= 0.15) return false;
+  return (std.emissive.r + std.emissive.g + std.emissive.b) * std.emissiveIntensity > 0.25;
+}
+
 function classifyMeshRole(
   mesh: THREE.Mesh,
   objectId: string,
@@ -164,8 +206,8 @@ function classifyMeshRole(
   const std = mat as THREE.MeshStandardMaterial;
   if (!std || !('color' in std)) return 'preserve';
 
-  // Keep emissive LED strips & light bulbs glowing untouched
-  if (std.emissive && std.emissiveIntensity > 0.28) {
+  // Keep emissive LED strips & light bulbs glowing untouched (ignore Three.js default black emissive)
+  if (isTrulyEmissive(std)) {
     return 'preserve';
   }
 
@@ -196,11 +238,31 @@ function classifyMeshRole(
     return 'metal';
   }
 
+  // Heated towel rail takes the fixture's metallic/lacquer finish (chrome / black / brass / satin)
+  if (objectId === 'bath_towel_warmer') {
+    return 'metal';
+  }
+
   // Bathroom ceramic white porcelain (basin / tub) stays clean ceramic secondary
   if (objectType === 'bath_fixtures') {
     std.color.getHSL(_roleColorHsl);
     if (std.roughness <= 0.24 && std.metalness <= 0.15 && _roleColorHsl.l >= 0.82) {
       return 'secondary';
+    }
+  }
+
+  // Small decorative white ceramic bowls resting on tables stay secondary accent
+  if (objectType === 'table') {
+    std.color.getHSL(_roleColorHsl);
+    if (std.roughness <= 0.24 && std.metalness <= 0.15 && _roleColorHsl.l >= 0.82) {
+      mesh.geometry.computeBoundingBox();
+      const bb = mesh.geometry.boundingBox;
+      if (bb) {
+        bb.getSize(_meshSizeVec);
+        if (Math.max(_meshSizeVec.x, _meshSizeVec.y, _meshSizeVec.z) < 0.35) {
+          return 'secondary';
+        }
+      }
     }
   }
 
@@ -260,8 +322,23 @@ function snapshotEditableMaterials(root: THREE.Object3D, objectId: string): void
     if (Array.isArray(mat)) return;
     const std = mat as THREE.MeshStandardMaterial;
     if (std.transparent && std.opacity < 0.72) return;
-    if (std.emissive && std.emissiveIntensity > 0.28) return;
+    if (isTrulyEmissive(std)) return;
     if (std.metalness >= 0.52) return;
+
+    // Exclude small decorative white ceramic bowls on tables from dominating primary material
+    if (objectType === 'table' && std.color) {
+      std.color.getHSL(_roleColorHsl);
+      if (std.roughness <= 0.24 && std.metalness <= 0.15 && _roleColorHsl.l >= 0.82) {
+        mesh.geometry.computeBoundingBox();
+        const bb = mesh.geometry.boundingBox;
+        if (bb) {
+          bb.getSize(_meshSizeVec);
+          if (Math.max(_meshSizeVec.x, _meshSizeVec.y, _meshSizeVec.z) < 0.35) {
+            return;
+          }
+        }
+      }
+    }
 
     mesh.geometry.computeBoundingBox();
     const bb = mesh.geometry.boundingBox;
@@ -288,18 +365,185 @@ function snapshotEditableMaterials(root: THREE.Object3D, objectId: string): void
   }
 }
 
+const _origLocalBox = new THREE.Box3();
+const _origLocalSize = new THREE.Vector3();
+const _origLocalCenter = new THREE.Vector3();
+const _meshWorldBox = new THREE.Box3();
+const _invRootMat = new THREE.Matrix4();
+const _upAxis = new THREE.Vector3(0, 1, 0);
+const _rotDeltaQuat = new THREE.Quaternion();
+const _targetQuat = new THREE.Quaternion();
+const _scaledPivot = new THREE.Vector3();
+const _pivotOld = new THREE.Vector3();
+const _pivotNew = new THREE.Vector3();
+
+export function normalizeRotationDeg(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  let norm = ((deg + 180) % 360 + 360) % 360 - 180;
+  if (norm <= -180) norm += 360;
+  if (Math.abs(norm) < 0.05) return 0;
+  return Number(norm.toFixed(1));
+}
+
+function snapshotEditableBounds(root: THREE.Object3D): void {
+  if (root.userData.origScale instanceof THREE.Vector3) return;
+  root.userData.origScale = root.scale.clone();
+  root.userData.origQuat = root.quaternion.clone();
+  root.userData.origChildren = [...root.children];
+
+  root.updateMatrixWorld(true);
+  _invRootMat.copy(root.matrixWorld).invert();
+  _origLocalBox.makeEmpty();
+
+  root.traverse((child) => {
+    if (!(child as THREE.Mesh).isMesh) return;
+    const mesh = child as THREE.Mesh;
+    mesh.geometry.computeBoundingBox();
+    if (!mesh.geometry.boundingBox) return;
+    _meshWorldBox.copy(mesh.geometry.boundingBox);
+    _meshWorldBox.applyMatrix4(mesh.matrixWorld);
+    _meshWorldBox.applyMatrix4(_invRootMat);
+    _origLocalBox.union(_meshWorldBox);
+  });
+
+  if (!_origLocalBox.isEmpty()) {
+    _origLocalBox.getSize(_origLocalSize);
+    _origLocalBox.getCenter(_origLocalCenter);
+    root.userData.origLocalBox = _origLocalBox.clone();
+    root.userData.origBoundsSize = _origLocalSize.clone();
+    root.userData.origPivotLocal = new THREE.Vector3(
+      _origLocalCenter.x,
+      0,
+      _origLocalCenter.z
+    );
+    root.userData.origMinY = _origLocalBox.min.y;
+  } else {
+    root.userData.origPivotLocal = new THREE.Vector3(0, 0, 0);
+  }
+}
+
 /**
- * Indexes all editable objects in the built scene and snapshots each object's original basePos & materials.
+ * Applies translation offset, self-centered Y-axis rotation (around the object's own geometric center),
+ * and optional custom-variant proportional scaling deterministically to a single editable object.
+ */
+export function applyEditableObjectTransform(
+  obj: THREE.Object3D,
+  dx: number,
+  dy: number,
+  dz: number,
+  rotYDeg: number,
+  dims?: [number, number, number]
+): void {
+  const basePos =
+    obj.userData.basePos instanceof THREE.Vector3
+      ? obj.userData.basePos
+      : (obj.userData.basePos = obj.position.clone());
+  const origScale =
+    obj.userData.origScale instanceof THREE.Vector3
+      ? obj.userData.origScale
+      : (obj.userData.origScale = obj.scale.clone());
+  const origQuat =
+    obj.userData.origQuat instanceof THREE.Quaternion
+      ? obj.userData.origQuat
+      : (obj.userData.origQuat = obj.quaternion.clone());
+  const pivotLocal =
+    obj.userData.activePivotLocal instanceof THREE.Vector3
+      ? obj.userData.activePivotLocal
+      : obj.userData.origPivotLocal instanceof THREE.Vector3
+        ? obj.userData.origPivotLocal
+        : (obj.userData.origPivotLocal = new THREE.Vector3(0, 0, 0));
+
+  let floorAnchorYOffset = 0;
+  const hasProceduralModel = Boolean(obj.userData.variantModelGroup);
+  const origBounds = obj.userData.origBoundsSize as THREE.Vector3 | undefined;
+  if (
+    !hasProceduralModel &&
+    dims &&
+    origBounds &&
+    origBounds.x > 0.04 &&
+    origBounds.y > 0.04 &&
+    origBounds.z > 0.04
+  ) {
+    const [targetW, targetH, targetD] = dims;
+    const targetMajor = Math.max(targetW, targetD);
+    const targetMinor = Math.min(targetW, targetD);
+
+    const xIsMajor = origBounds.x >= origBounds.z;
+    const targetX = xIsMajor ? targetMajor : targetMinor;
+    const targetZ = xIsMajor ? targetMinor : targetMajor;
+
+    const sx = THREE.MathUtils.clamp(targetX / origBounds.x, 0.55, 1.75);
+    const sy = THREE.MathUtils.clamp(targetH / origBounds.y, 0.55, 1.75);
+    const sz = THREE.MathUtils.clamp(targetZ / origBounds.z, 0.55, 1.75);
+
+    obj.scale.set(origScale.x * sx, origScale.y * sy, origScale.z * sz);
+    const origMinY = typeof obj.userData.origMinY === 'number' ? obj.userData.origMinY : 0;
+    if (Math.abs(basePos.y + origMinY) < 0.08) {
+      floorAnchorYOffset = origMinY * (1 - sy);
+    }
+  } else {
+    obj.scale.copy(origScale);
+  }
+
+  const rad = THREE.MathUtils.degToRad(normalizeRotationDeg(rotYDeg));
+  const hasRot = Math.abs(rad) > 1e-5;
+  const hasScaleChange =
+    Math.abs(obj.scale.x - origScale.x) > 1e-4 ||
+    Math.abs(obj.scale.y - origScale.y) > 1e-4 ||
+    Math.abs(obj.scale.z - origScale.z) > 1e-4;
+
+  if (hasRot) {
+    _rotDeltaQuat.setFromAxisAngle(_upAxis, rad);
+    _targetQuat.copy(_rotDeltaQuat).multiply(origQuat);
+    obj.quaternion.copy(_targetQuat);
+  } else {
+    _targetQuat.copy(origQuat);
+    obj.quaternion.copy(origQuat);
+  }
+
+  if (hasRot || hasScaleChange) {
+    // Keep the object's own geometric center fixed in XZ while rotating and/or scaling
+    _scaledPivot.set(
+      pivotLocal.x * origScale.x,
+      0,
+      pivotLocal.z * origScale.z
+    );
+    _pivotOld.copy(_scaledPivot).applyQuaternion(origQuat);
+
+    _scaledPivot.set(
+      pivotLocal.x * obj.scale.x,
+      0,
+      pivotLocal.z * obj.scale.z
+    );
+    _pivotNew.copy(_scaledPivot).applyQuaternion(_targetQuat);
+
+    obj.position.set(
+      basePos.x + dx + (_pivotOld.x - _pivotNew.x),
+      basePos.y + dy + floorAnchorYOffset,
+      basePos.z + dz + (_pivotOld.z - _pivotNew.z)
+    );
+  } else {
+    obj.position.set(basePos.x + dx, basePos.y + dy + floorAnchorYOffset, basePos.z + dz);
+  }
+
+  obj.updateMatrix();
+  obj.updateMatrixWorld(true);
+}
+
+/**
+ * Indexes all editable objects in the built scene and snapshots each object's original basePos, scale, rotation, bounds & materials.
  * Multiple variant meshes/groups can share the same semantic editableId (e.g., sofa styles).
  */
 export function indexEditableObjects(scene: THREE.Scene): Map<string, THREE.Object3D[]> {
   const map = new Map<string, THREE.Object3D[]>();
+  scene.updateMatrixWorld(true);
   scene.traverse((obj) => {
     const id = obj.userData?.editableId;
     if (typeof id === 'string' && id) {
       if (!(obj.userData.basePos instanceof THREE.Vector3)) {
         obj.userData.basePos = obj.position.clone();
       }
+      snapshotEditableBounds(obj);
       snapshotEditableMaterials(obj, id);
       const list = map.get(id);
       if (list) {
@@ -313,67 +557,211 @@ export function indexEditableObjects(scene: THREE.Scene): Map<string, THREE.Obje
 }
 
 /**
- * Applies saved offsets, replacement catalog variants & deletion flags onto every indexed editable object,
- * updating frozen scene-graph matrices immediately.
+ * Applies saved offsets, self-axis rotation, replacement catalog variants (materials + parsed dimensions) & deletion flags
+ * onto every indexed editable object, updating frozen scene-graph matrices immediately.
  */
 export function applyObjectEdits(
   index: Map<string, THREE.Object3D[]>,
   edits: ObjectEditsMap,
-  variantMatCache?: ObjectVariantMaterialCache
+  variantMatCache?: ObjectVariantMaterialCache,
+  placedParent?: THREE.Object3D
 ): void {
+  // 1) Reconcile dynamically placed custom catalog items (placed_*)
+  if (placedParent) {
+    const stalePlacedIds: string[] = [];
+    index.forEach((objs, id) => {
+      if (!isPlacedObjectId(id)) return;
+      const edit = edits[id];
+      if (!edit || edit.deleted || !edit.variant) {
+        for (const obj of objs) {
+          const prevModel = obj.userData.variantModelGroup as THREE.Group | undefined;
+          if (prevModel) {
+            obj.remove(prevModel);
+            disposeVariantModelGroup(prevModel);
+          }
+          placedParent.remove(obj);
+        }
+        stalePlacedIds.push(id);
+      }
+    });
+    for (const id of stalePlacedIds) {
+      index.delete(id);
+      editableLabelRegistry.delete(id);
+      unregisterDynamicEditableType(id);
+    }
+
+    for (const [id, edit] of Object.entries(edits)) {
+      if (!isPlacedObjectId(id) || edit.deleted || !edit.variant) continue;
+      const spec = getVariantById(edit.variant);
+      const bundle = spec && variantMatCache ? variantMatCache.getBundle(spec.id) : null;
+      if (!spec || !bundle) continue;
+
+      let objs = index.get(id);
+      let group: THREE.Group;
+      const axes: EditableMoveAxes =
+        spec.type === 'art' ||
+        spec.type === 'mirror' ||
+        spec.type === 'lighting' ||
+        spec.type === 'decor' ||
+        spec.type === 'textile' ||
+        spec.type === 'media_decor'
+          ? 'xyz'
+          : 'xz';
+
+      if (!objs || objs.length === 0) {
+        group = new THREE.Group();
+        group.name = `PlacedEditable_${id}`;
+        group.userData.editableId = id;
+        group.userData.editableLabel = spec.label;
+        group.userData.editableAxes = axes;
+        group.userData.editableType = spec.type;
+        group.userData.basePos = new THREE.Vector3(0, 0, 0);
+        group.userData.isPlacedItem = true;
+        group.matrixAutoUpdate = false;
+        placedParent.add(group);
+        objs = [group];
+        index.set(id, objs);
+      } else {
+        group = objs[0] as THREE.Group;
+        group.userData.editableLabel = spec.label;
+        group.userData.editableAxes = axes;
+        group.userData.editableType = spec.type;
+      }
+
+      editableLabelRegistry.set(id, spec.label);
+      registerDynamicEditableType(id, spec.type);
+
+      const sig = getVariantSignature(spec);
+      if (group.userData.appliedVariantSig !== sig) {
+        const prevModel = group.userData.variantModelGroup as THREE.Group | undefined;
+        if (prevModel) {
+          group.remove(prevModel);
+          disposeVariantModelGroup(prevModel);
+          delete group.userData.variantModelGroup;
+        }
+        const built = buildStandalonePlacedModel(spec, bundle);
+        group.add(built.group);
+        group.userData.variantModelGroup = built.group;
+        group.userData.activePivotLocal = built.pivotLocal;
+        group.userData.appliedVariantSig = sig;
+      }
+
+      group.visible = true;
+      const dx = edit.offset?.[0] ?? 0;
+      const dy = edit.offset?.[1] ?? 0;
+      const dz = edit.offset?.[2] ?? 0;
+      const rotY = edit.rotY ?? 0;
+      applyEditableObjectTransform(group, dx, dy, dz, rotY);
+    }
+  }
+
+  // 2) Update all built-in apartment editable objects
   index.forEach((objs, id) => {
+    if (isPlacedObjectId(id)) return;
     const edit = edits[id];
     const deleted = Boolean(edit?.deleted);
     const dx = edit?.offset?.[0] ?? 0;
     const dy = edit?.offset?.[1] ?? 0;
     const dz = edit?.offset?.[2] ?? 0;
+    const rotY = edit?.rotY ?? 0;
 
-    const variantId = edit?.variant;
+    const objectType = getEditableType(id);
+    const variantId = edit?.variant ? migrateLegacyVariantId(id, edit.variant) : undefined;
     const variantSpec = variantId ? getVariantById(variantId) : null;
     const validVariant =
-      variantSpec && variantSpec.type === getEditableType(id) ? variantSpec : null;
+      variantSpec && variantSpec.type === objectType ? variantSpec : null;
     const bundle =
       validVariant && variantMatCache ? variantMatCache.getBundle(validVariant.id) : null;
 
     for (const obj of objs) {
-      const basePos =
-        obj.userData.basePos instanceof THREE.Vector3
-          ? obj.userData.basePos
-          : (obj.userData.basePos = obj.position.clone());
       obj.visible = !deleted;
-      obj.position.set(basePos.x + dx, basePos.y + dy, basePos.z + dz);
 
-      const appliedKey = validVariant ? validVariant.id : '';
-      if (obj.userData.appliedVariantId !== appliedKey) {
-        obj.traverse((child) => {
-          if (!(child as THREE.Mesh).isMesh) return;
-          const mesh = child as THREE.Mesh;
-          const orig = mesh.userData.origMaterial as THREE.Material | THREE.Material[] | undefined;
-          if (!orig) return;
+      const appliedSig = validVariant && bundle ? getVariantSignature(validVariant) : '';
+      if (obj.userData.appliedVariantSig !== appliedSig) {
+        // Dispose any previously attached procedural replacement model
+        const prevModel = obj.userData.variantModelGroup as THREE.Group | undefined;
+        if (prevModel) {
+          obj.remove(prevModel);
+          disposeVariantModelGroup(prevModel);
+          delete obj.userData.variantModelGroup;
+          delete obj.userData.activePivotLocal;
+        }
 
-          if (!bundle) {
-            mesh.material = orig;
-            return;
+        const origChildren =
+          (obj.userData.origChildren as THREE.Object3D[] | undefined) ?? obj.children;
+        const origLocalBox = obj.userData.origLocalBox as THREE.Box3 | undefined;
+        const useProcedural = Boolean(
+          validVariant && bundle && origLocalBox && shouldUseProceduralModel(id, validVariant)
+        );
+
+        let attachedProcedural = false;
+        if (useProcedural && validVariant && bundle && origLocalBox) {
+          const built = buildVariantReplacementModel(id, validVariant, bundle, origLocalBox);
+          if (built) {
+            for (const ch of origChildren) {
+              ch.visible = false;
+            }
+            obj.add(built.group);
+            obj.userData.variantModelGroup = built.group;
+            obj.userData.activePivotLocal = built.pivotLocal;
+            attachedProcedural = true;
           }
+        }
 
-          const role = (mesh.userData.variantRole as MeshVariantRole | undefined) ?? 'primary';
-          if (role === 'preserve') {
-            mesh.material = orig;
-          } else if (role === 'glass') {
-            mesh.material = bundle.glass ?? orig;
-          } else if (role === 'metal') {
-            mesh.material = bundle.metal;
-          } else if (role === 'secondary') {
-            mesh.material = bundle.secondary;
-          } else {
-            mesh.material = bundle.primary;
+        if (!attachedProcedural) {
+          for (const ch of origChildren) {
+            ch.visible = true;
           }
-        });
-        obj.userData.appliedVariantId = appliedKey;
+          obj.traverse((child) => {
+            if (child.userData?.isVariantModel) return;
+            if (!(child as THREE.Mesh).isMesh) return;
+            const mesh = child as THREE.Mesh;
+            const orig = mesh.userData.origMaterial as THREE.Material | THREE.Material[] | undefined;
+            if (!orig) return;
+
+            if (!bundle) {
+              mesh.material = orig;
+              return;
+            }
+
+            const origSingle = Array.isArray(orig) ? null : orig;
+            const isDoubleSide = origSingle?.side === THREE.DoubleSide;
+            const hasPolyOffset = Boolean(origSingle?.polygonOffset);
+            const hasUv = Boolean(mesh.geometry?.attributes?.uv);
+
+            const pickPrimary = () => {
+              if (!hasUv) return bundle.primaryFlat;
+              if (isDoubleSide) return bundle.primaryDoubleSide;
+              if (hasPolyOffset) return bundle.primaryPolygonOffset;
+              return bundle.primary;
+            };
+
+            const role = (mesh.userData.variantRole as MeshVariantRole | undefined) ?? 'primary';
+            if (role === 'preserve') {
+              mesh.material = orig;
+            } else if (role === 'glass') {
+              // For solid wood/stone table replacements without glassTintHex, replace glass top with primary material
+              if (bundle.glass) {
+                mesh.material = bundle.glass;
+              } else if (objectType === 'table') {
+                mesh.material = pickPrimary();
+              } else {
+                mesh.material = orig;
+              }
+            } else if (role === 'metal') {
+              mesh.material = isDoubleSide ? bundle.metalDoubleSide : bundle.metal;
+            } else if (role === 'secondary') {
+              mesh.material = bundle.secondary;
+            } else {
+              mesh.material = pickPrimary();
+            }
+          });
+        }
+
+        obj.userData.appliedVariantSig = appliedSig;
       }
 
-      obj.updateMatrix();
-      obj.updateMatrixWorld(true);
+      applyEditableObjectTransform(obj, dx, dy, dz, rotY, validVariant?.dimensionsM);
     }
   });
 }

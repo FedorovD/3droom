@@ -816,18 +816,22 @@ export function buildBathroomScene(
 
   setLightingMode('daylight');
 
+  const placedItemsGroup = new THREE.Group();
+  placedItemsGroup.name = 'PlacedCustomItems';
+  scene.add(placedItemsGroup);
+
   // Freeze static architectural scene-graph matrices once after assembly (zero per-frame matrix work!)
   scene.updateMatrixWorld(true);
   const editableIndex = indexEditableObjects(scene);
   const variantMatCache = createObjectVariantMaterialCache(anisotropy);
   scene.traverse((obj) => {
-    if (!(obj as THREE.Sprite).isSprite) {
+    if (!(obj as THREE.Sprite).isSprite && obj !== placedItemsGroup) {
       obj.matrixAutoUpdate = false;
     }
   });
 
   const setObjectEdits = (edits: ObjectEditsMap) => {
-    applyObjectEdits(editableIndex, edits, variantMatCache);
+    applyObjectEdits(editableIndex, edits, variantMatCache, placedItemsGroup);
   };
 
   const getEditableObjects = (id: string): THREE.Object3D[] => {

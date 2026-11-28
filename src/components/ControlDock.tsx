@@ -13,6 +13,7 @@ import {
   Maximize2,
   Minimize2,
   Moon,
+  Plus,
   RefreshCw,
   RotateCcw,
   Ruler,
@@ -45,6 +46,7 @@ import {
 import {
   ALL_EDITABLE_IDS,
   getEditableLabel,
+  isPlacedObjectId,
   ObjectEditsMap,
 } from '../scene/editableObjects';
 import {
@@ -53,6 +55,7 @@ import {
   getVariantsForType,
   getVariantThumbnail,
   groupEditableIdsByType,
+  isEditableObjectEnabledInDesign,
 } from '../scene/objectCatalog';
 import { GyroStatus, VR_VIEWPOINTS, VrViewpointId } from '../scene/vrPanorama';
 import { DesignTab, WallZoneTab } from '../state/storage';
@@ -107,6 +110,10 @@ interface ControlDockProps {
   wallZoneTab: WallZoneTab;
   onChangeWallZoneTab: (tab: WallZoneTab) => void;
   objectEdits: ObjectEditsMap;
+  catalogVersion: number;
+  customPendingCount: number;
+  customSyncedCount: number;
+  onOpenCatalogModal: (initialType?: EditableObjectType) => void;
   onReplaceObject: (id: string, variantId: string | null) => void;
   onResetObjects: (ids: string[]) => void;
   shareState: SharePanelState;
@@ -154,6 +161,10 @@ export function ControlDock({
   wallZoneTab,
   onChangeWallZoneTab,
   objectEdits,
+  catalogVersion,
+  customPendingCount,
+  customSyncedCount,
+  onOpenCatalogModal,
   onReplaceObject,
   onResetObjects,
   shareState,
@@ -162,6 +173,7 @@ export function ControlDock({
   onCloseSharePanel,
   sharedBanner,
 }: ControlDockProps) {
+  void catalogVersion;
   const [restoreListOpen, setRestoreListOpen] = useState(false);
   const [selectedRestoreIds, setSelectedRestoreIds] = useState<string[]>([]);
   const [catalogGroupsOpen, setCatalogGroupsOpen] = useState(false);
@@ -427,11 +439,19 @@ export function ControlDock({
                                       Math.abs(edit.offset[2]) >= 0.001)
                                 );
                                 const isDeleted = Boolean(edit.deleted);
+                                const hasRotY =
+                                  typeof edit.rotY === 'number' && Math.abs(edit.rotY) >= 0.05;
                                 const variantSpec = getVariantById(edit.variant);
                                 const statusParts: string[] = [];
-                                if (isDeleted) statusParts.push('Удалён');
-                                if (variantSpec) statusParts.push(`Заменён: ${variantSpec.label}`);
-                                if (hasOffset) statusParts.push('Сдвинут');
+                                if (isPlacedObjectId(id)) {
+                                  statusParts.push('Добавлен в интерьер');
+                                  if (hasRotY) statusParts.push(`Повёрнут ${Math.round(edit.rotY ?? 0)}°`);
+                                } else {
+                                  if (isDeleted) statusParts.push('Удалён');
+                                  if (variantSpec) statusParts.push(`Заменён: ${variantSpec.label}`);
+                                  if (hasOffset) statusParts.push('Сдвинут');
+                                  if (hasRotY) statusParts.push(`Повёрнут ${Math.round(edit.rotY ?? 0)}°`);
+                                }
                                 const statusText = statusParts.join(' · ') || 'Изменён';
 
                                 return (
@@ -1036,6 +1056,37 @@ export function ControlDock({
                       </button>
                     </section>
 
+                    {/* Custom Catalog & Sync Launcher */}
+                    <section aria-label="Свой каталог предметов">
+                      <button
+                        type="button"
+                        onClick={() => onOpenCatalogModal()}
+                        className="flex w-full items-center justify-between gap-2 border border-[#7a9181]/45 bg-[#1c2620] px-2.5 py-2 text-left transition-colors hover:border-[#8fa896] hover:bg-[#243229]"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#e6f0e9]">
+                            <Plus className="h-3.5 w-3.5 shrink-0 text-[#9cb8a4]" />
+                            <span className="truncate">Свой каталог и синхронизация</span>
+                          </div>
+                          <div className="truncate text-[9.5px] text-[#9eb0a3]">
+                            Добавить фото, размеры текстом → в 3D-сцену
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {customPendingCount > 0 && (
+                            <span className="font-mono-nums border border-[#c4a163]/50 bg-[#2d2619] px-1.5 py-0.5 text-[9.5px] font-semibold text-[#ecd099]">
+                              +{customPendingCount}
+                            </span>
+                          )}
+                          {customSyncedCount > 0 && (
+                            <span className="font-mono-nums border border-[#7a9181]/45 bg-[#223227] px-1.5 py-0.5 text-[9.5px] font-semibold text-[#b3d4bd]">
+                              {customSyncedCount}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    </section>
+
                     {/* All Editable Objects Grouped by Type with Inline Mini-Photo Replacement */}
                     <section
                       aria-label="Редактируемые предметы по типам"
@@ -1106,9 +1157,13 @@ export function ControlDock({
                                     {grp.ids.map((id) => {
                                       const edit = objectEdits[id];
                                       const activeVar = getVariantById(edit?.variant);
+                                      const isInScene = isEditableObjectEnabledInDesign(
+                                        id,
+                                        designConfig
+                                      );
                                       const isItemExpanded = activeCatalogItemId === id;
                                       const activeThumb = activeVar
-                                        ? getVariantThumbnail(activeVar)
+                                        ? getVariantThumbnail(activeVar, id)
                                         : '';
 
                                       return (
@@ -1144,9 +1199,11 @@ export function ControlDock({
                                                 <div className="truncate text-[9px] leading-tight text-[#8f9d93]">
                                                   {edit?.deleted
                                                     ? 'Удалён (нажмите вариант, чтобы вернуть)'
-                                                    : activeVar
-                                                      ? activeVar.label
-                                                      : 'Оригинал'}
+                                                    : !isInScene
+                                                      ? 'Скрыт (включится при замене)'
+                                                      : activeVar
+                                                        ? activeVar.label
+                                                        : 'Оригинал'}
                                                 </div>
                                               </div>
                                             </div>
@@ -1174,7 +1231,7 @@ export function ControlDock({
                                               <div className="grid grid-cols-2 gap-1">
                                                 {variants.map((opt) => {
                                                   const isCur = edit?.variant === opt.id;
-                                                  const thumb = getVariantThumbnail(opt);
+                                                  const thumb = getVariantThumbnail(opt, id);
                                                   return (
                                                     <button
                                                       key={opt.id}

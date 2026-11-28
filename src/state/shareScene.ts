@@ -18,6 +18,7 @@ const MAX_OBJECT_EDITS = 80;
 interface SerializedObjectEdit {
   id: string;
   offset?: [number, number, number];
+  rotY?: number;
   deleted?: boolean;
   variant?: string;
 }
@@ -104,6 +105,14 @@ export async function createSharedScene(
         Number(Math.max(-15, Math.min(15, edit.offset[2])).toFixed(3)),
       ];
     }
+    if (
+      typeof edit.rotY === 'number' &&
+      Number.isFinite(edit.rotY) &&
+      Math.abs(edit.rotY) >= 0.05 &&
+      Math.abs(edit.rotY) <= 360
+    ) {
+      entry.rotY = Number(edit.rotY.toFixed(1));
+    }
     if (edit.deleted) {
       entry.deleted = true;
     }
@@ -115,7 +124,7 @@ export async function createSharedScene(
     ) {
       entry.variant = edit.variant;
     }
-    if (entry.offset || entry.deleted || entry.variant) {
+    if (entry.offset || entry.rotY !== undefined || entry.deleted || entry.variant) {
       objectEditsList.push(entry);
     }
   }

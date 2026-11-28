@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { BathroomViewport, VrViewportActions } from './components/BathroomViewport';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  BathroomViewport,
+  SpawnPose,
+  VrViewportActions,
+} from './components/BathroomViewport';
+import { CatalogManagerModal } from './components/CatalogManagerModal';
 import { ControlDock, SharedBannerState, SharePanelState } from './components/ControlDock';
 import {
   CuratedDesignPreset,
@@ -14,8 +19,23 @@ import {
   LightingMode,
   ViewMode,
 } from './scene/dimensions';
-import { ObjectEditsMap } from './scene/editableObjects';
+import {
+  generatePlacedObjectId,
+  isPlacedObjectId,
+  ObjectEditsMap,
+} from './scene/editableObjects';
+import {
+  EditableObjectType,
+  getEditableDesignGroup,
+  registerCustomVariants,
+  VariantShapeSpec,
+} from './scene/objectCatalog';
 import { GyroStatus, VrViewpointId } from './scene/vrPanorama';
+import {
+  CustomCatalogItem,
+  customItemsToVariantSpecs,
+  listCustomCatalogItems,
+} from './state/customCatalog';
 import {
   copyTextToClipboard,
   createSharedScene,
@@ -71,6 +91,80 @@ export default function App() {
     error: '',
   });
   const [sharedBanner, setSharedBanner] = useState<SharedBannerState | null>(null);
+
+  const [customItems, setCustomItems] = useState<CustomCatalogItem[]>([]);
+  const [customItemsLoading, setCustomItemsLoading] = useState(true);
+  const [customItemsError, setCustomItemsError] = useState('');
+  const [catalogVersion, setCatalogVersion] = useState(0);
+  const [catalogModalOpen, setCatalogModalOpen] = useState(false);
+  const [catalogInitialType, setCatalogInitialType] = useState<EditableObjectType | null>(null);
+
+  const applyCustomCatalogItems = useCallback((nextItems: CustomCatalogItem[]) => {
+    registerCustomVariants(customItemsToVariantSpecs(nextItems));
+    setCustomItems(nextItems);
+    setCatalogVersion((v) => v + 1);
+  }, []);
+
+  // Load user's custom catalog items from Firestore once on startup so synced items are immediately live in 3D
+  useEffect(() => {
+    let cancelled = false;
+    setCustomItemsLoading(true);
+    listCustomCatalogItems()
+      .then((items) => {
+        if (cancelled) return;
+        applyCustomCatalogItems(items);
+        setCustomItemsError('');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCustomItemsError('Не удалось загрузить свой каталог из Firebase.');
+      })
+      .finally(() => {
+        if (!cancelled) setCustomItemsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyCustomCatalogItems]);
+
+  const customPendingCount = useMemo(
+    () => customItems.filter((i) => i.status !== 'synced').length,
+    [customItems]
+  );
+  const customSyncedCount = customItems.length - customPendingCount;
+
+  const handleOpenCatalogModal = useCallback((initialType?: EditableObjectType) => {
+    setCatalogInitialType(initialType ?? null);
+    setCatalogModalOpen(true);
+  }, []);
+
+  const getSpawnPoseRef = useRef<
+    ((type: EditableObjectType, shape?: VariantShapeSpec) => SpawnPose) | null
+  >(null);
+  const focusPlacedObjectRef = useRef<((objectId: string) => void) | null>(null);
+
+  const handleCloseCatalogModal = useCallback(() => {
+    setCatalogModalOpen(false);
+  }, []);
+
+  const handlePlaceCatalogItemInScene = useCallback((item: CustomCatalogItem) => {
+    if (item.status !== 'synced' || !item.spec) return;
+    const pose = getSpawnPoseRef.current?.(item.type, item.spec.shape) ?? {
+      position: [5.2, 0, 4.2] as [number, number, number],
+      rotY: 0,
+    };
+    const placedId = generatePlacedObjectId();
+    setObjectEdits((prev) => ({
+      ...prev,
+      [placedId]: {
+        variant: item.id,
+        offset: pose.position,
+        ...(Math.abs(pose.rotY) >= 0.05 ? { rotY: pose.rotY } : {}),
+      },
+    }));
+    setCatalogModalOpen(false);
+    focusPlacedObjectRef.current?.(placedId);
+  }, []);
 
   // Track browser fullscreen state cleanly
   useEffect(() => {
@@ -255,7 +349,12 @@ export default function App() {
           Math.abs(rounded[1]) < 0.001 &&
           Math.abs(rounded[2]) < 0.001;
         const existing = prev[id];
-        if (isZero && !existing?.deleted && !existing?.variant) {
+        if (
+          isZero &&
+          !existing?.deleted &&
+          !existing?.variant &&
+          existing?.rotY === undefined
+        ) {
           if (!(id in prev)) return prev;
           const next = { ...prev };
           delete next[id];
@@ -273,11 +372,135 @@ export default function App() {
     []
   );
 
+  const handleRotateObject = useCallback((id: string, rotYDeg: number) => {
+    setObjectEdits((prev) => {
+      let norm = ((rotYDeg + 180) % 360 + 360) % 360 - 180;
+      if (norm <= -180) norm += 360;
+      const isZero = Math.abs(norm) < 0.05;
+      const nextRotY = isZero ? undefined : Number(norm.toFixed(1));
+      const existing = prev[id];
+      if (isZero && !existing?.deleted && !existing?.variant && !existing?.offset) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      return {
+        ...prev,
+        [id]: {
+          ...existing,
+          rotY: nextRotY,
+        },
+      };
+    });
+  }, []);
+
   const handleReplaceObject = useCallback((id: string, variantId: string | null) => {
+    // Enable hidden furniture groups automatically and switch to matching 3D geometry
+    // when replacing main sofa/bed/TV/kitchen objects with a corresponding built-in style.
+    if (variantId) {
+      const grp = getEditableDesignGroup(id);
+      if (grp !== 'always') {
+        setDesignConfig((prev) => {
+          if (grp === 'sofa') {
+            const matchedSofaStyle =
+              variantId === 'sofa_boucle_cream'
+                ? ('boucle_l' as const)
+                : variantId === 'sofa_velvet_olive'
+                  ? ('velvet_olive' as const)
+                  : variantId === 'sofa_graphite_mod'
+                    ? ('graphite_mod' as const)
+                    : null;
+            if (id === 'sofa_main' && matchedSofaStyle && prev.sofa !== matchedSofaStyle) {
+              return { ...prev, sofa: matchedSofaStyle };
+            }
+            if (prev.sofa === 'none') {
+              return { ...prev, sofa: matchedSofaStyle ?? 'boucle_l' };
+            }
+            return prev;
+          }
+          if (grp === 'tvZone') {
+            const matchedTvStyle =
+              variantId === 'media_walnut_copper'
+                ? ('minimal_wood' as const)
+                : variantId === 'media_dark_slate'
+                  ? ('stone_slate' as const)
+                  : variantId === 'media_light_travertine'
+                    ? ('clean_floating' as const)
+                    : null;
+            if (
+              (id === 'tv_console' || id === 'tv_backdrop') &&
+              matchedTvStyle &&
+              prev.tvZone !== matchedTvStyle
+            ) {
+              return { ...prev, tvZone: matchedTvStyle };
+            }
+            if (prev.tvZone === 'none') {
+              return { ...prev, tvZone: matchedTvStyle ?? 'minimal_wood' };
+            }
+            return prev;
+          }
+          if (grp === 'livingAny' && prev.tvZone === 'none' && prev.sofa === 'none') {
+            return { ...prev, sofa: 'boucle_l' };
+          }
+          if (grp === 'kitchen') {
+            const matchedKitchenStyle =
+              variantId === 'kitchen_cashmere_oak'
+                ? ('warm_cashmere' as const)
+                : variantId === 'kitchen_sage_walnut'
+                  ? ('sage_walnut' as const)
+                  : variantId === 'kitchen_graphite_stone'
+                    ? ('graphite_stone' as const)
+                    : null;
+            if (
+              (id === 'kitchen_lower' || id === 'kitchen_upper' || id === 'kitchen_fridge') &&
+              matchedKitchenStyle &&
+              prev.kitchen !== matchedKitchenStyle
+            ) {
+              return { ...prev, kitchen: matchedKitchenStyle };
+            }
+            if (prev.kitchen === 'none') {
+              return { ...prev, kitchen: matchedKitchenStyle ?? 'warm_cashmere' };
+            }
+            return prev;
+          }
+          if (grp === 'bedroom') {
+            const matchedBedroomStyle =
+              variantId === 'bed_linen_oak'
+                ? ('soft_linen' as const)
+                : variantId === 'bed_walnut_burgundy'
+                  ? ('walnut_burgundy' as const)
+                  : variantId === 'bed_graphite_cream'
+                    ? ('modern_boucle' as const)
+                    : null;
+            if (id === 'bed_main' && matchedBedroomStyle && prev.bedroom !== matchedBedroomStyle) {
+              return { ...prev, bedroom: matchedBedroomStyle };
+            }
+            if (prev.bedroom === 'none') {
+              return { ...prev, bedroom: matchedBedroomStyle ?? 'soft_linen' };
+            }
+            return prev;
+          }
+          if (grp === 'entryFurniture' && !prev.entryFurniture) {
+            return { ...prev, entryFurniture: true };
+          }
+          if (grp === 'curtains' && !prev.curtains) {
+            return { ...prev, curtains: true };
+          }
+          return prev;
+        });
+      }
+    }
+
     setObjectEdits((prev) => {
       const existing = prev[id];
-      const nextVariant = variantId || undefined;
-      if (!nextVariant && !existing?.deleted && !existing?.offset) {
+      const nextVariant = variantId || (isPlacedObjectId(id) ? existing?.variant : undefined);
+      if (
+        !nextVariant &&
+        !existing?.deleted &&
+        !existing?.offset &&
+        existing?.rotY === undefined
+      ) {
         if (!(id in prev)) return prev;
         const next = { ...prev };
         delete next[id];
@@ -295,18 +518,35 @@ export default function App() {
   }, []);
 
   const handleDeleteObject = useCallback((id: string) => {
-    setObjectEdits((prev) => ({
-      ...prev,
-      [id]: {
-        ...prev[id],
-        deleted: true,
-      },
-    }));
+    setObjectEdits((prev) => {
+      if (isPlacedObjectId(id)) {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      return {
+        ...prev,
+        [id]: {
+          ...prev[id],
+          deleted: true,
+        },
+      };
+    });
   }, []);
 
   const handleResetObject = useCallback((id: string) => {
     setObjectEdits((prev) => {
       if (!(id in prev)) return prev;
+      if (isPlacedObjectId(id)) {
+        return {
+          ...prev,
+          [id]: {
+            ...prev[id],
+            rotY: undefined,
+          },
+        };
+      }
       const next = { ...prev };
       delete next[id];
       return next;
@@ -404,7 +644,12 @@ export default function App() {
   // Keyboard shortcuts: 1-9 for camera views, F for Walk Mode, V for VR 360°, Esc to exit, H to toggle HUD
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (catalogModalOpen) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement
+      ) {
         return;
       }
       if (e.key === 'Escape') {
@@ -434,6 +679,7 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
+    catalogModalOpen,
     handleCloseSharePanel,
     handleSelectPreset,
     handleToggleVrPanoMode,
@@ -455,12 +701,17 @@ export default function App() {
         walkMode={walkMode}
         onCurrentRoomChange={setCurrentRoom}
         objectEdits={objectEdits}
+        catalogVersion={catalogVersion}
+        onOpenCatalogModal={handleOpenCatalogModal}
         onMoveObject={handleMoveObject}
+        onRotateObject={handleRotateObject}
         onReplaceObject={handleReplaceObject}
         onDeleteObject={handleDeleteObject}
         onResetObject={handleResetObject}
         captureCameraRef={captureCameraRef}
         applyCameraRef={applyCameraRef}
+        getSpawnPoseRef={getSpawnPoseRef}
+        focusPlacedObjectRef={focusPlacedObjectRef}
         vrPanoMode={vrPanoMode}
         vrViewpoint={vrViewpoint}
         vrRecenterTrigger={vrRecenterTrigger}
@@ -509,6 +760,10 @@ export default function App() {
         wallZoneTab={wallZoneTab}
         onChangeWallZoneTab={setWallZoneTab}
         objectEdits={objectEdits}
+        catalogVersion={catalogVersion}
+        customPendingCount={customPendingCount}
+        customSyncedCount={customSyncedCount}
+        onOpenCatalogModal={handleOpenCatalogModal}
         onReplaceObject={handleReplaceObject}
         onResetObjects={handleResetObjects}
         shareState={shareState}
@@ -516,6 +771,17 @@ export default function App() {
         onCopyShareUrl={handleCopyShareUrl}
         onCloseSharePanel={handleCloseSharePanel}
         sharedBanner={sharedBanner}
+      />
+
+      <CatalogManagerModal
+        open={catalogModalOpen}
+        initialType={catalogInitialType}
+        items={customItems}
+        loading={customItemsLoading}
+        loadError={customItemsError}
+        onItemsChange={applyCustomCatalogItems}
+        onPlaceInScene={handlePlaceCatalogItemInScene}
+        onClose={handleCloseCatalogModal}
       />
     </main>
   );

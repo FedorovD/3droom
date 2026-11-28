@@ -18,6 +18,7 @@ import {
   ViewMode,
 } from '../scene/dimensions';
 import { ObjectEditsMap, ObjectEditState } from '../scene/editableObjects';
+import { migrateLegacyVariantId } from '../scene/objectCatalog';
 
 const APP_STATE_KEY = 'brest_lenina36_3d_state_v1';
 const CAMERA_STATE_KEY = 'brest_lenina36_3d_camera_v1';
@@ -111,6 +112,13 @@ function sanitizeObjectEditEntry(rec: Record<string, unknown>): ObjectEditState 
       ];
     }
   }
+  if (isFiniteNum(rec.rotY) && Math.abs(rec.rotY) <= 360) {
+    let norm = ((rec.rotY + 180) % 360 + 360) % 360 - 180;
+    if (norm <= -180) norm += 360;
+    if (Math.abs(norm) >= 0.05) {
+      clean.rotY = Number(norm.toFixed(1));
+    }
+  }
   if (typeof rec.deleted === 'boolean' && rec.deleted) {
     clean.deleted = true;
   }
@@ -122,7 +130,7 @@ function sanitizeObjectEditEntry(rec: Record<string, unknown>): ObjectEditState 
   ) {
     clean.variant = rec.variant;
   }
-  return clean.offset || clean.deleted || clean.variant ? clean : null;
+  return clean.offset || clean.rotY !== undefined || clean.deleted || clean.variant ? clean : null;
 }
 
 export function sanitizeAppState(
@@ -168,7 +176,10 @@ export function sanitizeAppState(
       const id = typeof rec.id === 'string' ? rec.id : '';
       if (!id || id.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(id)) continue;
       const clean = sanitizeObjectEditEntry(rec);
-      if (clean) objectEdits[id] = clean;
+      if (clean) {
+        if (clean.variant) clean.variant = migrateLegacyVariantId(id, clean.variant);
+        objectEdits[id] = clean;
+      }
     }
   } else if (parsed.objectEdits && typeof parsed.objectEdits === 'object') {
     const rawEdits = parsed.objectEdits as Record<string, unknown>;
@@ -179,6 +190,7 @@ export function sanitizeAppState(
       if (!entry || typeof entry !== 'object') continue;
       const clean = sanitizeObjectEditEntry(entry as Record<string, unknown>);
       if (clean) {
+        if (clean.variant) clean.variant = migrateLegacyVariantId(id, clean.variant);
         objectEdits[id] = clean;
         count += 1;
       }
