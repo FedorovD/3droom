@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CeilingStyleId, WALL_FINISHES, WallFinishId, WallFinishOption } from './designCatalog';
 import { APT } from './dimensions';
 import { MaterialLibrary } from './textures';
+import { mergeStaticMeshes } from './mergeStaticMeshes';
 
 export interface WallFinishSystemHandle {
   applyWallFinishes: (mainId: WallFinishId, bedroomId: WallFinishId | 'same') => void;
@@ -289,6 +290,9 @@ export function buildWallFinishSystem(
   addMoldingFrame(moldingsBedroomInterior, 'xFace', APT.X1, -1, 3.34, 4.22, 0.88, H - 0.24, mats.bedroomWallMat);
   addMoldingFrame(moldingsBedroomInterior, 'xFace', APT.X1, -1, 4.38, 5.26, 0.88, H - 0.24, mats.bedroomWallMat);
 
+  for (const group of [moldingsLivingNorth, moldingsBedroomNorth, moldingsLivingInterior, moldingsBedroomInterior]) {
+    mergeStaticMeshes(group);
+  }
   targets.northExtGroup.add(moldingsLivingNorth, moldingsBedroomNorth);
   targets.interiorWalls.add(moldingsLivingInterior, moldingsBedroomInterior);
 
@@ -465,6 +469,8 @@ export function buildWallFinishSystem(
   addCurtainCove(APT.X7 - APT.X4 - 0.06, 0.14, (APT.X4 + APT.X7) * 0.5, APT.Z2 - 0.09); // Kitchen South
   addCurtainCove(0.14, closetNorthZ - APT.Z1 - 0.06, APT.X0 + 0.09, (APT.Z1 + closetNorthZ) * 0.5); // Bedroom West
 
+  mergeStaticMeshes(shadowGapGroup);
+  mergeStaticMeshes(tracksGroup);
   targets.ceilingGroup.add(shadowGapGroup, spotsOnlyGroup, tracksGroup);
 
   // =========================================================================

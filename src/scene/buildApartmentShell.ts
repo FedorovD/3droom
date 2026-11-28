@@ -18,6 +18,7 @@ import { applyWorldBoxUVs } from './fixtures';
 import { buildLaminateTextures } from './laminateTexture';
 import { MaterialLibrary } from './textures';
 import { buildWallFinishSystem } from './wallFinishSystem';
+import { mergeStaticMeshes } from './mergeStaticMeshes';
 
 export interface ApartmentShellHandle {
   group: THREE.Group;
@@ -235,6 +236,7 @@ function createWindowAssembly(
   glass.renderOrder = 3;
   g.add(glass);
 
+  mergeStaticMeshes(g);
   return g;
 }
 
@@ -684,6 +686,7 @@ function createEntryDoor(
   peepCore.position.set(0, peepY, leafFrontZ + 0.0064);
   g.add(peepPlate, peepCore);
 
+  mergeStaticMeshes(g);
   return g;
 }
 
@@ -815,6 +818,7 @@ function createWhiteRadiator(
   if (!sidePiped) {
     g.add(topValve, botValve, thermoHead, stubTop, stubBot);
   }
+  mergeStaticMeshes(g);
   return g;
 }
 
@@ -1633,7 +1637,7 @@ export function buildApartmentShell(
 
   const westVistaMesh = new THREE.Mesh(westVistaGeo, westStreetMat);
   westVistaMesh.position.set(1.4, 1.55, 3.3);
-  westVistaMesh.renderOrder = 0;
+  westVistaMesh.frustumCulled = false;
   westBackdropGroup.add(westVistaMesh);
   group.add(westBackdropGroup);
 
@@ -1834,6 +1838,7 @@ export function buildApartmentShell(
     unionNut.position.set(bedRadPortX, py, bedRadSouthPortZ + 0.012);
     bedPipesGroup.add(elbow1, jog, elbow2, stub, unionNut);
   }
+  mergeStaticMeshes(bedPipesGroup);
   westExtGroup.add(bedPipesGroup);
 
   // 5) South pier down to South corner (Z = WIN_BED2_Z1 .. Z2 + ET)
@@ -1909,6 +1914,7 @@ export function buildApartmentShell(
       westClosetPipes.add(clip);
     }
   }
+  mergeStaticMeshes(westClosetPipes);
   westExtGroup.add(westClosetPipes);
   group.add(westExtGroup);
 
@@ -2192,6 +2198,7 @@ export function buildApartmentShell(
   railBar.position.set(kitWallX - 0.007, 1.29, kitZ0 + 1.25);
   kitchenWallDetails.add(cableLoop, railBar);
 
+  mergeStaticMeshes(kitchenWallDetails);
   eastExtGroup.add(kitchenWallDetails);
   group.add(eastExtGroup);
 
@@ -2277,6 +2284,7 @@ export function buildApartmentShell(
     unionNut.position.set(radWestPortX - 0.01, py, radPortZ);
     southClosetPipes.add(elbow1, jog, elbow2, stub, unionNut);
   }
+  mergeStaticMeshes(southClosetPipes);
   southExtGroup.add(southClosetPipes);
   // 2) Living Room South-West vertical heating riser box (короб стояка, 12 x 14 cm, floor-to-ceiling)
   //    + small recessed corner pocket between the riser box & the under-window radiator niche
@@ -2405,6 +2413,7 @@ export function buildApartmentShell(
 
     livRadPipes.add(valveBody, hexL, hexR, union, stem, wing);
   }
+  mergeStaticMeshes(livRadPipes);
   southExtGroup.add(livRadPipes);
 
   // Living Room Full-Height Balcony Door (with operable hinged leaf for Walk Mode)
@@ -2521,6 +2530,7 @@ export function buildApartmentShell(
 
     kitRadPipes.add(valveBody, hexL, hexR, union, stem, wing);
   }
+  mergeStaticMeshes(kitRadPipes);
   southExtGroup.add(kitRadPipes);
 
   // 7) Right pier to East corner (X = WIN_KIT_X1 .. X7)
@@ -2742,7 +2752,7 @@ export function buildApartmentShell(
     let nextBackdrop = false;
     let nextWestBackdrop = false;
 
-    const isTopPlan = activePreset === 'plan' || cameraPos.y > 10.5;
+    const isTopPlan = viewMode !== 'interior' && (activePreset === 'plan' || cameraPos.y > 10.5);
     if (viewMode !== 'interior') {
       nextCeil = false;
       const pad = 0.25;

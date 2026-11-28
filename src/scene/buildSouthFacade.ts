@@ -1216,7 +1216,7 @@ export function buildSouthFacade(
   const vistaMesh = new THREE.Mesh(vistaGeo, streetMat);
   // Center curvature around Living Room/Balcony hub; 3rd-floor horizon aligns with eye level
   vistaMesh.position.set(5.6, 1.15, 6.2);
-  vistaMesh.renderOrder = 0;
+  vistaMesh.frustumCulled = false;
   streetBackdropGroup.add(vistaMesh);
 
   const setLightingMode = (mode: LightingMode) => {
